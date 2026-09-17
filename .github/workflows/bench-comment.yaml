@@ -1,0 +1,53 @@
+name: Benchmark Comment
+
+on:
+  workflow_run:
+    workflows: [Benchmark]
+    types: [completed]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  comment:
+    name: Post Benchmark Comment
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion == 'success'
+    steps:
+      - name: Download benchmark artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: bench-comment
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
+      # github.event.workflow_run.pull_requests is only populated for PRs whose
+      # head branch lives in this repo, so it's empty for fork PRs. The
+      # commits/{sha}/pulls REST endpoint has the same gap for fork commits
+      # (it isn't reliably indexed), so use search instead.
+      - name: Resolve PR number
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          number=$(gh api "search/issues?q=${{ github.event.workflow_run.head_sha }}+repo:${{ github.repository }}+type:pr" --jq '.items[0].number')
+          echo "number=$number" >> "$GITHUB_OUTPUT"
+
+      - name: Find existing comment
+        if: steps.pr.outputs.number != ''
+        uses: peter-evans/find-comment@b30e6a3c0ed37e7c023ccd3f1db5c6c0b0c23aad # v4
+        id: find-comment
+        with:
+          issue-number: ${{ steps.pr.outputs.number }}
+          comment-author: 'github-actions[bot]'
+          body-includes: '## Benchmark Results'
+
+      - name: Post or update benchmark comment
+        if: steps.pr.outputs.number != ''
+        uses: peter-evans/create-or-update-comment@e8674b075228eee787fea43ef493e45ece1004c9 # v5
+        with:
+          comment-id: ${{ steps.find-comment.outputs.comment-id }}
+          issue-number: ${{ steps.pr.outputs.number }}
+          edit-mode: replace
+          body-path: comment-body.md
