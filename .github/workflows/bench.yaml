@@ -1,0 +1,77 @@
+name: Benchmark
+
+on:
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bench-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  benchmark:
+    name: Benchmark Comparison
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Install benchstat
+        run: go install golang.org/x/perf/cmd/benchstat@latest
+
+      # Excludes any benchmark named *_LargeScale by convention: those are opt-in-only
+      # (see BenchmarkRunConvert_LargeScale's doc comment), too slow to run twice per PR here.
+      - name: Resolve benchmark pattern
+        id: pattern
+        run: |
+          list=$(go test -list='^Benchmark' ./... | grep '^Benchmark' | grep -v '_LargeScale$' | sort -u | paste -sd '|' -)
+          echo "pattern=^(${list})$" >> "$GITHUB_OUTPUT"
+
+      # Both runs happen sequentially in this job on the same runner to eliminate
+      # cross-machine variance. No caching: comparing results from different runner
+      # instances introduces noise that can look like a regression.
+      - name: Benchmark base branch
+        run: |
+          git checkout ${{ github.event.pull_request.base.sha }}
+          go test -run='^$' -bench='${{ steps.pattern.outputs.pattern }}' -benchtime=1x -count=10 -timeout=20m ./... \
+            | tee bench-base.txt
+
+      - name: Benchmark PR HEAD
+        run: |
+          git checkout ${{ github.event.pull_request.head.sha }}
+          go test -run='^$' -bench='${{ steps.pattern.outputs.pattern }}' -benchtime=1x -count=10 -timeout=20m ./... \
+            | tee bench-head.txt
+
+      - name: Build comment body
+        run: |
+          BENCHSTAT_OUT=$(benchstat bench-base.txt bench-head.txt 2>&1) || true
+          export BENCHSTAT_OUT
+          BASE_SHORT="${{ github.event.pull_request.base.sha }}"
+          export BASE_SHORT="${BASE_SHORT:0:8}"
+          HEAD_SHORT="${{ github.event.pull_request.head.sha }}"
+          export HEAD_SHORT="${HEAD_SHORT:0:8}"
+          RAW_BASE=$(cat bench-base.txt)
+          export RAW_BASE
+          RAW_HEAD=$(cat bench-head.txt)
+          export RAW_HEAD
+
+          envsubst '$BENCHSTAT_OUT $BASE_SHORT $HEAD_SHORT $RAW_BASE $RAW_HEAD' \
+            < .github/templates/bench-comment.md \
+            > comment-body.md
+
+      - name: Upload benchmark artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bench-comment
+          path: comment-body.md
+          retention-days: 1
