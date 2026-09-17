@@ -72,9 +72,12 @@ func formatSupportFor(f options.OutputFormat) (formatSupport, bool) {
 	}
 }
 
-// detectInputFormat returns the native format of the file at path, derived from its extension
-// (case-insensitive): any extension not named below means NDJSON.
-func detectInputFormat(path string) options.OutputFormat {
+// DetectInputFormat returns the native format of the file at path, derived from its extension
+// (case-insensitive): any extension not named below means NDJSON. ProcessFile calls this itself
+// when WithInputFormat isn't given; it's exported so a caller that needs the format ahead of time
+// (for example, to build format-specific options before calling ProcessFile) can run the same
+// detection instead of duplicating or guessing at it.
+func DetectInputFormat(path string) Format {
 	switch strings.ToLower(filepath.Ext(path)) {
 	case ".parquet":
 		return options.FormatParquet
@@ -103,7 +106,8 @@ func ProcessFile(
 	sink := options.DocumentHandler(handler)
 	in := cfg.InputFormat
 	if in == "" {
-		in = detectInputFormat(path)
+		in = DetectInputFormat(path)
+		cfg.InputFormat = in
 	}
 
 	// Requested output matches the input's own native format: raw passthrough, sending the

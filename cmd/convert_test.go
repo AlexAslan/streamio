@@ -196,6 +196,50 @@ func TestRunConvert_JSONToParquetIgnoresWorkersFlag(t *testing.T) {
 	}
 }
 
+// TestRunConvert_JSONToCSVIgnoresWorkersFlag checks --out-format csv with --csv-has-header produces
+// exactly one header line and every row in order even when --workers requests more than one —
+// pinning a fix for a real bug: CSV/TSV output used to honor --workers like any other non-Parquet
+// format, but with more than one worker and no streaming encoder, dispatch delivers batches in
+// completion order (not input order) and each worker's own encoder derives and writes its own
+// header from its first batch, corrupting the output with reordered rows and a repeated header.
+func TestRunConvert_JSONToCSVIgnoresWorkersFlag(t *testing.T) {
+	const rows = 500
+	in := writeNDJSONFixture(t, rows)
+	out := filepath.Join(t.TempDir(), "out.csv")
+
+	flags := convertFlags{in: in, out: out, batchSize: 10, workers: 8, csvHasHeader: true}
+	if err := runConvert(context.Background(), flags, "csv"); err != nil {
+		t.Fatalf("runConvert: %v", err)
+	}
+
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("reading %s: %v", out, err)
+	}
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	if len(lines) != rows+1 {
+		t.Fatalf("output has %d lines, want %d (1 header + %d rows)", len(lines), rows+1, rows)
+	}
+	if lines[0] != "id,name" {
+		t.Errorf("header = %q, want %q", lines[0], "id,name")
+	}
+	headerCount := 0
+	for _, line := range lines {
+		if line == "id,name" {
+			headerCount++
+		}
+	}
+	if headerCount != 1 {
+		t.Errorf("header line appears %d times, want exactly 1", headerCount)
+	}
+	for i := 1; i <= rows; i++ {
+		want := fmt.Sprintf("%d,row-%d", i-1, i-1)
+		if lines[i] != want {
+			t.Errorf("row %d = %q, want %q (order not preserved)", i-1, lines[i], want)
+		}
+	}
+}
+
 // TestRunConvert_ParquetToParquetProducesOneValidFile pins a fix for a real bug: Parquet input with
 // more than one row group converted straight through to Parquet output used to take the raw-
 // passthrough route regardless of --out-format's single-file contract, dispatching one complete,

@@ -87,6 +87,30 @@ func TestNewDecoder_HeaderNamesColumns(t *testing.T) {
 
 // TestNewDecoder_ScalarsDecodeAsBytes checks a value that looks numeric or boolean still decodes
 // as record.KindBytes: CSV has no type system of its own, so nothing is inferred.
+// TestNewDecoder_HeaderWithQuotedNewline checks a header whose one logical record spans more than
+// one physical line (a quoted column name containing a literal newline) is read and skipped
+// correctly, rather than truncated mid-quote or leaving the data region's start offset misresolved.
+func TestNewDecoder_HeaderWithQuotedNewline(t *testing.T) {
+	path := writeCSVFile(t, "\"first\nname\",id\nAlice,1\nBob,2\n")
+	dec := openRecordDecoder(t, path, newConfig(1, 0, ',', true))
+
+	rows := mustDrainRecords(t, dec, 8)
+	want := []map[string]string{
+		{"first\nname": "Alice", "id": "1"},
+		{"first\nname": "Bob", "id": "2"},
+	}
+	if len(rows) != len(want) {
+		t.Fatalf("decoded %d rows, want %d: %v", len(rows), len(want), rows)
+	}
+	for i := range want {
+		for k, v := range want[i] {
+			if rows[i][k] != v {
+				t.Errorf("row %d field %q = %q, want %q", i, k, rows[i][k], v)
+			}
+		}
+	}
+}
+
 func TestNewDecoder_ScalarsDecodeAsBytes(t *testing.T) {
 	path := writeCSVFile(t, "n,b\n42,true\n")
 	dec := openRecordDecoder(t, path, newConfig(1, 0, ',', true))

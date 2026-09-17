@@ -5,6 +5,7 @@ import (
 	"encoding/json/jsontext"
 	"errors"
 	"fmt"
+	"io"
 	"streamio/internal/record"
 )
 
@@ -57,6 +58,9 @@ func (d *ObjectDecoder) Decode(rec record.Record, doc []byte) (record.Record, er
 			return rec, nameErr
 		}
 		if name.Kind() == jsontext.KindEndObject {
+			if _, trailingErr := d.dec.ReadToken(); !errors.Is(trailingErr, io.EOF) {
+				return rec, fmt.Errorf("%w: trailing data after closing brace", ErrUnexpectedToken)
+			}
 			return rec, nil
 		}
 		if name.Kind() != jsontext.KindString {

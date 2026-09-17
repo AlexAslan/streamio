@@ -59,7 +59,9 @@ func TestNewRawSource_SkipsHeaderDispatchesDataRows(t *testing.T) {
 	})
 
 	rows := drainRawSource(t, src)
-	want := []string{"1,Alice", "2,Bob"}
+	// Raw passthrough preserves each line's original terminator exactly, so dispatched rows can be
+	// concatenated back to back with no separator and still reproduce the input's own bytes.
+	want := []string{"1,Alice\n", "2,Bob\n"}
 	if len(rows) != len(want) {
 		t.Fatalf("dispatched %d rows, want %d: %v", len(rows), len(want), rows)
 	}

@@ -120,6 +120,8 @@ func TestDecode_RejectsUnsupportedDocuments(t *testing.T) {
 		{name: "array", doc: `{"a":[1,2]}`, want: "nested value not supported"},
 		{name: "top-level array", doc: `[1,2]`, want: "not a JSON object"},
 		{name: "top-level scalar", doc: `"just a string"`, want: "not a JSON object"},
+		{name: "trailing object after close", doc: `{"a":1}{"b":2}`, want: "unexpected token"},
+		{name: "trailing garbage after close", doc: `{"a":1}garbage`, want: "unexpected token"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

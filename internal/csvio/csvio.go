@@ -7,7 +7,6 @@ package csvio
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/csv"
 	"errors"
 	"fmt"
@@ -172,25 +171,25 @@ func (s *sharedState) openChunkReader(chunkIdx, chunkStart int64) (*bufio.Reader
 	return br, int64(len(discarded)), nil
 }
 
-// readHeaderLine reads the file's first physical line and parses it as one CSV row of column
-// names, returning the names and the byte offset just past the line's terminator. This is a
-// one-shot, once-per-file read, not the per-row hot path record_decoder.go optimizes, so a
-// throwaway csv.Reader over the known-length header bytes costs nothing worth avoiding.
+// readHeaderLine reads the file's first logical CSV record as the header's column names, returning
+// the names and the byte offset just past that record. This is a one-shot, once-per-file read, not
+// the per-row hot path record_decoder.go optimizes, so driving a real csv.Reader directly over the
+// file (rather than a throwaway physical-line read) costs nothing worth avoiding — and is required
+// for correctness: a header is a logical record like any other row and may legally contain a quoted
+// newline (e.g. `"first\nname",id`), which a physical-line read would either truncate mid-quote or
+// leave bodyStart misresolved partway through the header. InputOffset() reports the byte offset
+// just past the most recently completed row, the same technique record_decoder.go's csvRowReader
+// uses to bound a chunk, so it gives bodyStart exactly, however many physical lines the header
+// record actually spans.
 func readHeaderLine(f *os.File, delimiter rune) ([]string, int64, error) {
 	sr := io.NewSectionReader(f, 0, math.MaxInt64)
-	br := bufio.NewReader(sr)
-
-	raw, err := br.ReadBytes('\n')
-	if err != nil && !errors.Is(err, io.EOF) {
-		return nil, 0, err
-	}
-
-	r := csv.NewReader(bytes.NewReader(raw))
+	r := csv.NewReader(sr)
 	r.Comma = delimiter
 	r.FieldsPerRecord = -1
-	names, parseErr := r.Read()
-	if parseErr != nil {
-		return nil, 0, fmt.Errorf("csv header: %w", parseErr)
+
+	names, err := r.Read()
+	if err != nil {
+		return nil, 0, fmt.Errorf("csv header: %w", err)
 	}
-	return names, int64(len(raw)), nil
+	return names, r.InputOffset(), nil
 }

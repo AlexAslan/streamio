@@ -134,28 +134,30 @@ func csvOptions(flags convertFlags, inFormat, outFormat streamio.Format) ([]stre
 	return opts, nil
 }
 
-// runConvert builds the options ProcessFile needs from flags and outFormat, and drives the run to
-// completion, writing every dispatched document to --out.
-func runConvert(ctx context.Context, flags convertFlags, outFormatFlag string) error {
-	outFormat, err := parseFormat(outFormatFlag)
-	if err != nil {
-		return fmt.Errorf("--out-format: %w", err)
-	}
-
+// buildConvertOptions turns flags and outFormat into the streamio.Options ProcessFile needs.
+func buildConvertOptions(flags convertFlags, outFormat streamio.Format) ([]streamio.Option, error) {
 	opts := []streamio.Option{streamio.WithOutputFormat(outFormat)}
 	inFormat := streamio.Format("")
 	if flags.inFormat != "" {
-		var inFormatErr error
-		inFormat, inFormatErr = parseFormat(flags.inFormat)
-		if inFormatErr != nil {
-			return fmt.Errorf("--in-format: %w", inFormatErr)
+		var err error
+		inFormat, err = parseFormat(flags.inFormat)
+		if err != nil {
+			return nil, fmt.Errorf("--in-format: %w", err)
 		}
 		opts = append(opts, streamio.WithInputFormat(inFormat))
 	}
 
-	csvOpts, err := csvOptions(flags, inFormat, outFormat)
+	// csvOptions needs the input's actual format even when --in-format wasn't given, since
+	// --csv-has-header/--csv-delimiter must apply to an auto-detected CSV/TSV input too; detect it
+	// from --in the same way ProcessFile itself would.
+	effectiveInFormat := inFormat
+	if effectiveInFormat == "" {
+		effectiveInFormat = streamio.DetectInputFormat(flags.in)
+	}
+
+	csvOpts, err := csvOptions(flags, effectiveInFormat, outFormat)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	opts = append(opts, csvOpts...)
 
@@ -174,17 +176,47 @@ func runConvert(ctx context.Context, flags convertFlags, outFormatFlag string) e
 
 	// A single Parquet writer can't be driven by more than one goroutine, so single-file streaming
 	// output forces one decode worker regardless of --workers; see WithSingleFileOutput's doc.
-	if outFormat == streamio.FormatParquet {
+	//
+	// CSV/TSV output needs the same treatment: with more than one worker and no streaming encoder,
+	// dispatch delivers batches in completion order (not input order) and each worker's own encoder
+	// derives and (if --csv-has-header) writes its own header from its first batch, so the output
+	// file would gain reordered rows and a repeated header. Forcing single-file streaming output
+	// keeps one encoder deriving the header once and emitting rows in dispatch order for the whole
+	// run.
+	if outFormat == streamio.FormatParquet || isCSVFamily(outFormat) {
 		opts = append(opts, streamio.WithSingleFileOutput(true), streamio.WithParallelWorkers(1))
 	} else if flags.workers > 0 {
 		opts = append(opts, streamio.WithParallelWorkers(flags.workers))
+	}
+
+	return opts, nil
+}
+
+// runConvert builds the options ProcessFile needs from flags and outFormat, and drives the run to
+// completion, writing every dispatched document to --out.
+func runConvert(ctx context.Context, flags convertFlags, outFormatFlag string) (err error) {
+	outFormat, err := parseFormat(outFormatFlag)
+	if err != nil {
+		return fmt.Errorf("--out-format: %w", err)
+	}
+
+	opts, err := buildConvertOptions(flags, outFormat)
+	if err != nil {
+		return err
 	}
 
 	out, err := newFileWriter(flags.out)
 	if err != nil {
 		return err
 	}
-	defer out.close()
+	// fileWriter buffers output, so a flush/close failure (a full or failing filesystem) must
+	// surface as a run failure rather than being silently discarded by a bare defer — otherwise
+	// runConvert can report success after losing buffered output bytes.
+	defer func() {
+		if closeErr := out.close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("closing %s: %w", flags.out, closeErr)
+		}
+	}()
 
 	// JSON dispatches one document per row with no separator of its own, so newlineWriter adds
 	// one. Every other format's encoder already returns fully self-terminated batches — csvio's
@@ -194,7 +226,8 @@ func runConvert(ctx context.Context, flags convertFlags, outFormatFlag string) e
 		handler = newlineWriter{fileWriter: out}.write
 	}
 
-	result, err := streamio.ProcessFile(ctx, flags.in, handler, opts...)
+	var result streamio.Result
+	result, err = streamio.ProcessFile(ctx, flags.in, handler, opts...)
 	if err != nil {
 		if errors.Is(err, parquetgo.ErrTooManyRowGroups) {
 			return fmt.Errorf(
