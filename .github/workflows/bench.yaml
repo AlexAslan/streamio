@@ -40,22 +40,34 @@ jobs:
       # Both runs happen sequentially in this job on the same runner to eliminate
       # cross-machine variance. No caching: comparing results from different runner
       # instances introduces noise that can look like a regression.
+      #
+      # BenchmarkRunConvert drives runConvert directly, which logs a "wrote <path>: N rows
+      # read, ..." line to stdout on every successful conversion — real CLI behavior, not
+      # something the benchmark suppresses. That interleaves with go test's own output on
+      # every iteration, and benchstat chokes trying to parse those lines as results
+      # ("parsing iteration count: invalid syntax"). grep -E filters the piped output down to
+      # lines benchstat actually understands before either file is written.
       - name: Benchmark base branch
         run: |
           git checkout ${{ github.event.pull_request.base.sha }}
           go test -run='^$' -bench='${{ steps.pattern.outputs.pattern }}' -benchtime=1x -count=10 -timeout=20m ./... \
-            | tee bench-base.txt
+            | tee bench-base-raw.txt \
+            | grep -E '^(goos|goarch|pkg|cpu|Benchmark|PASS|FAIL|ok[[:space:]])' > bench-base.txt
 
       - name: Benchmark PR HEAD
         run: |
           git checkout ${{ github.event.pull_request.head.sha }}
           go test -run='^$' -bench='${{ steps.pattern.outputs.pattern }}' -benchtime=1x -count=10 -timeout=20m ./... \
-            | tee bench-head.txt
+            | tee bench-head-raw.txt \
+            | grep -E '^(goos|goarch|pkg|cpu|Benchmark|PASS|FAIL|ok[[:space:]])' > bench-head.txt
 
-      # Renders the template by reading each piece straight from disk instead of routing it
-      # through the environment (envsubst's approach): bench-base.txt/bench-head.txt now hold
-      # count=10 runs of 25 benchmark cases each, easily large enough to blow past the OS's
-      # ARG_MAX for a single exec's environment block, which envsubst hit outright.
+      # Renders the template by reading benchstat's diff straight from disk instead of routing
+      # it through the environment (envsubst's approach): with count=10 runs of 25 benchmark
+      # cases, that output is easily large enough to blow past the OS's ARG_MAX for a single
+      # exec's environment block, which envsubst hit outright. The comment itself only carries
+      # the benchstat diff, not the raw per-iteration output — that output alone is large
+      # enough to blow past GitHub's own comment size limit and get silently truncated
+      # mid-table; the full bench-*-raw.txt files go out as a build artifact instead.
       - name: Build comment body
         run: |
           benchstat bench-base.txt bench-head.txt > bench-diff.txt 2>&1 || true
@@ -66,8 +78,6 @@ jobs:
             /\$\{BASE_SHORT\}/ { gsub(/\$\{BASE_SHORT\}/, base) }
             /\$\{HEAD_SHORT\}/ { gsub(/\$\{HEAD_SHORT\}/, head) }
             /\$\{BENCHSTAT_OUT\}/ { while ((getline line < "bench-diff.txt") > 0) print line; next }
-            /\$\{RAW_BASE\}/ { while ((getline line < "bench-base.txt") > 0) print line; next }
-            /\$\{RAW_HEAD\}/ { while ((getline line < "bench-head.txt") > 0) print line; next }
             { print }
           ' .github/templates/bench-comment.md > comment-body.md
 
@@ -75,5 +85,8 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: bench-comment
-          path: comment-body.md
+          path: |
+            comment-body.md
+            bench-base-raw.txt
+            bench-head-raw.txt
           retention-days: 1
