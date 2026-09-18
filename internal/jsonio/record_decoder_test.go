@@ -3,7 +3,6 @@ package jsonio_test
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"math"
 	"streamio/internal/formatio"
@@ -73,12 +72,13 @@ func mustDrainRecords(tb testing.TB, dec formatio.RecordDecoder, batchSize int) 
 	return lines
 }
 
-// openRecordDecoder opens a decoder over path and registers its Close.
+// openRecordDecoder opens a decoder over path and registers its Close, along with the underlying
+// file's, since NewDecoder no longer owns opening or closing the file itself.
 //
 //nolint:ireturn // formatio.RecordDecoder is exactly what the constructor under test returns.
 func openRecordDecoder(tb testing.TB, path string, cfg options.Config) formatio.RecordDecoder {
 	tb.Helper()
-	dec, err := jsonio.NewDecoder(cfg, path)
+	dec, err := jsonio.NewDecoder(cfg, openSource(tb, path))
 	if err != nil {
 		tb.Fatalf("NewDecoder: %v", err)
 	}
@@ -187,9 +187,8 @@ func TestNewDecoder_PreservesFieldOrder(t *testing.T) {
 	}
 }
 
-// TestNewDecoder_RejectsUnsupportedLines pins the documented scope: flat objects of scalars, with
-// a specific error naming the offending field for anything else, rather than a silent
-// reinterpretation.
+// TestNewDecoder_RejectsUnsupportedLines pins the documented scope: an object, arbitrarily nested,
+// with a specific error for anything else, rather than a silent reinterpretation.
 func TestNewDecoder_RejectsUnsupportedLines(t *testing.T) {
 	type args struct {
 		name     string
@@ -198,8 +197,6 @@ func TestNewDecoder_RejectsUnsupportedLines(t *testing.T) {
 	}
 
 	tests := []args{
-		{name: "nested object", line: `{"a":{"b":1}}`, wantText: `nested value not supported`},
-		{name: "array", line: `{"a":[1,2]}`, wantText: `nested value not supported`},
 		{name: "top-level array", line: `[1,2]`, wantText: `not a JSON object`},
 		{name: "top-level scalar", line: `"just a string"`, wantText: `not a JSON object`},
 		{name: "malformed", line: `{"a":}`, wantText: `jsontext`},
@@ -221,18 +218,63 @@ func TestNewDecoder_RejectsUnsupportedLines(t *testing.T) {
 	}
 }
 
-// TestNewDecoder_NestedErrorNamesTheField checks the nested-value error says which field it was,
-// which is the whole point of rejecting rather than skipping.
-func TestNewDecoder_NestedErrorNamesTheField(t *testing.T) {
-	path := writeNdjsonFile(t, []string{`{"id":1,"attributes":{"a":"b"}}`})
+// TestNewDecoder_RowErrorWrapsMalformedLine checks a malformed line's DecodeNext error unwraps to
+// a *formatio.RowError, the marker pool.recordWorker uses to decide a row error is safe to skip
+// and resume past under RowErrorSkip — and that the decoder genuinely does resume: a second
+// DecodeNext call after the error returns the next line, not the same failing one again or EOF.
+func TestNewDecoder_RowErrorWrapsMalformedLine(t *testing.T) {
+	path := writeNdjsonFile(t, []string{`{"a":}`, `{"b":2}`})
 	dec := openRecordDecoder(t, path, newConfig(1, 0, 0))
 
-	_, err := drainRecordDecoder(dec, 8)
-	if err == nil {
-		t.Fatal("decoding a nested object returned no error")
+	batch := make([]record.Record, 1)
+	n, err := dec.DecodeNext(context.Background(), batch)
+	if n != 0 {
+		t.Fatalf("DecodeNext on the malformed line filled %d records, want 0", n)
 	}
-	if !strings.Contains(err.Error(), `"attributes"`) {
-		t.Errorf("error %q does not name the offending field", err)
+	var rowErr *formatio.RowError
+	if !errors.As(err, &rowErr) {
+		t.Fatalf("DecodeNext error = %v, want it to unwrap to *formatio.RowError", err)
+	}
+
+	n, err = dec.DecodeNext(context.Background(), batch)
+	if err != nil {
+		t.Fatalf("DecodeNext after the malformed line: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("DecodeNext after the malformed line filled %d records, want 1", n)
+	}
+	got := flatten(batch[0])
+	if len(got) != 1 || got[0].name != "b" || got[0].i64 != 2 {
+		t.Errorf("resumed at %+v, want field b=2", got)
+	}
+}
+
+// TestNewDecoder_DecodesNestedObjectAndArray checks a nested object and array decode into
+// record.KindMap/record.KindList on the full record-decoder path (chunked, batched), not just via
+// ObjectDecoder.Decode in isolation (see decoder_test.go's equivalent coverage there).
+func TestNewDecoder_DecodesNestedObjectAndArray(t *testing.T) {
+	path := writeNdjsonFile(t, []string{`{"id":1,"attributes":{"a":"b"},"tags":["x","y"]}`})
+	dec := openRecordDecoder(t, path, newConfig(1, 0, 0))
+
+	rows := mustDrainRecords(t, dec, 8)
+	if len(rows) != 1 {
+		t.Fatalf("decoded %d lines, want 1", len(rows))
+	}
+
+	var attrs, tags *decodedField
+	for i := range rows[0] {
+		switch rows[0][i].name {
+		case "attributes":
+			attrs = &rows[0][i]
+		case "tags":
+			tags = &rows[0][i]
+		}
+	}
+	if attrs == nil || attrs.kind != record.KindMap {
+		t.Errorf("attributes = %+v, want a present KindMap field", attrs)
+	}
+	if tags == nil || tags.kind != record.KindList {
+		t.Errorf("tags = %+v, want a present KindList field", tags)
 	}
 }
 
@@ -400,14 +442,5 @@ func TestNewDecoder_ContextCancellation(t *testing.T) {
 	batch := make([]record.Record, 8)
 	if _, err := dec.DecodeNext(ctx, batch); !errors.Is(err, context.Canceled) {
 		t.Fatalf("DecodeNext error = %v, want context.Canceled", err)
-	}
-}
-
-// TestNewDecoder_MissingFile checks the constructor surfaces an open failure rather than returning
-// a decoder that fails later.
-func TestNewDecoder_MissingFile(t *testing.T) {
-	_, err := jsonio.NewDecoder(newConfig(1, 0, 0), fmt.Sprintf("%s/absent.ndjson", t.TempDir()))
-	if err == nil {
-		t.Fatal("NewDecoder on a missing file returned no error")
 	}
 }

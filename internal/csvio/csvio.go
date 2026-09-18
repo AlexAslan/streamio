@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"os"
 	"streamio/internal/options"
 	"sync"
 	"sync/atomic"
@@ -46,8 +45,8 @@ func delimiterFor(cfg options.Config, format options.OutputFormat) rune {
 // mirroring jsonio's sharedState — the two packages split a file into byte-range chunks the same
 // way, differing only in what a chunk's rows decode into.
 type sharedState struct {
-	f              *os.File
-	path           string
+	f              io.ReaderAt
+	name           string
 	header         []string
 	size           int64
 	nextChunk      atomic.Int64
@@ -60,24 +59,13 @@ type sharedState struct {
 	hasHeader      bool
 }
 
-// openShared opens the CSV/TSV file at path, reads its header row when cfg.CSV.HasHeader says
-// there is one, and builds the state every decode worker shares.
-func openShared(cfg options.Config, path string, format options.OutputFormat) (*os.File, *sharedState, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	stat, err := f.Stat()
-	if err != nil {
-		f.Close()
-		return nil, nil, err
-	}
-
+// openShared reads src's header row when cfg.CSV.HasHeader says there is one, and builds the state
+// every decode worker shares.
+func openShared(cfg options.Config, src options.Source, format options.OutputFormat) (*sharedState, error) {
 	s := &sharedState{
-		f:              f,
-		path:           path,
-		size:           stat.Size(),
+		f:              src.Reader,
+		name:           src.Name,
+		size:           src.Size,
 		delimiter:      delimiterFor(cfg, format),
 		hasHeader:      cfg.CSV.HasHeader,
 		readBufferSize: cfg.Run.ReadBufferSize,
@@ -89,10 +77,9 @@ func openShared(cfg options.Config, path string, format options.OutputFormat) (*
 	}
 
 	if cfg.CSV.HasHeader {
-		header, headerEnd, headerErr := readHeaderLine(f, s.delimiter)
+		header, headerEnd, headerErr := readHeaderLine(src.Reader, s.delimiter)
 		if headerErr != nil {
-			f.Close()
-			return nil, nil, headerErr
+			return nil, headerErr
 		}
 		s.header = header
 		s.bodyStart = headerEnd
@@ -100,10 +87,10 @@ func openShared(cfg options.Config, path string, format options.OutputFormat) (*
 
 	if cfg.Logger != nil {
 		cfg.Logger.Printf("csv file %s, size: %d bytes, delimiter: %q, header: %v",
-			path, stat.Size(), s.delimiter, cfg.CSV.HasHeader)
+			src.Name, src.Size, s.delimiter, cfg.CSV.HasHeader)
 	}
 
-	return f, s, nil
+	return s, nil
 }
 
 // claimChunk claims the next unclaimed chunk from the shared queue, returning its index and start
@@ -181,7 +168,7 @@ func (s *sharedState) openChunkReader(chunkIdx, chunkStart int64) (*bufio.Reader
 // just past the most recently completed row, the same technique record_decoder.go's csvRowReader
 // uses to bound a chunk, so it gives bodyStart exactly, however many physical lines the header
 // record actually spans.
-func readHeaderLine(f *os.File, delimiter rune) ([]string, int64, error) {
+func readHeaderLine(f io.ReaderAt, delimiter rune) ([]string, int64, error) {
 	sr := io.NewSectionReader(f, 0, math.MaxInt64)
 	r := csv.NewReader(sr)
 	r.Comma = delimiter

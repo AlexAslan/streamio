@@ -59,7 +59,7 @@ func runRawSource(tb testing.TB, path string, workers int) ([][]byte, options.Re
 		options.WithOutputFormat(options.FormatParquet),
 	)
 
-	src, err := parquetio.NewRawSource(cfg, path)
+	src, err := parquetio.NewRawSource(cfg, openSource(tb, path))
 	if err != nil {
 		tb.Fatalf("NewRawSource: %v", err)
 	}
@@ -167,15 +167,6 @@ func TestRawSource_OneDocumentPerRowGroup(t *testing.T) {
 	}
 }
 
-// TestRawSource_MissingFile checks the constructor surfaces an open failure instead of returning a
-// source that fails later, mid-run.
-func TestRawSource_MissingFile(t *testing.T) {
-	_, err := parquetio.NewRawSource(options.New(), filepath.Join(t.TempDir(), "does-not-exist.parquet"))
-	if err == nil {
-		t.Fatal("NewRawSource on a missing file returned no error")
-	}
-}
-
 // TestRawSource_ContextCancellation checks a cancelled context stops the source rather than running
 // the file to completion.
 func TestRawSource_ContextCancellation(t *testing.T) {
@@ -185,7 +176,7 @@ func TestRawSource_ContextCancellation(t *testing.T) {
 		options.WithParallelWorkers(2),
 		options.WithOutputFormat(options.FormatParquet),
 	)
-	src, err := parquetio.NewRawSource(cfg, path)
+	src, err := parquetio.NewRawSource(cfg, openSource(t, path))
 	if err != nil {
 		t.Fatalf("NewRawSource: %v", err)
 	}
@@ -214,7 +205,7 @@ func TestRawSource_SinkErrorPropagates(t *testing.T) {
 		options.WithParallelWorkers(1),
 		options.WithOutputFormat(options.FormatParquet),
 	)
-	src, err := parquetio.NewRawSource(cfg, path)
+	src, err := parquetio.NewRawSource(cfg, openSource(t, path))
 	if err != nil {
 		t.Fatalf("NewRawSource: %v", err)
 	}

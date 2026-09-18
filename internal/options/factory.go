@@ -2,6 +2,8 @@ package options
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 )
 
@@ -87,6 +89,9 @@ type DocumentHandler func(ctx context.Context, doc []byte) error
 type Stats struct {
 	// RowsRead is how many input rows were decoded, regardless of how many documents they became.
 	RowsRead int64
+	// RowsSkipped is how many rows WithMaxRowErrors allowed to be skipped. Always zero under the
+	// default MaxRowErrors of 0.
+	RowsSkipped int64
 	// DocumentsDispatched is how many documents were handed to the caller's handler. It can differ
 	// from RowsRead when an encoder renders a whole batch as one document (Parquet) rather than one
 	// document per row (NDJSON).
@@ -101,3 +106,26 @@ type Stats struct {
 type Result struct {
 	Stats Stats
 }
+
+// ErrTooManyRowErrors is TooManyRowErrorsError's sentinel: wrapped so a caller can check for this
+// failure with errors.Is without depending on the concrete type.
+var ErrTooManyRowErrors = errors.New("streamio: too many row errors")
+
+// TooManyRowErrorsError is returned when the number of skipped row errors exceeds MaxRowErrors: the
+// (MaxRowErrors+1)th row error stops the run rather than being skipped, and this wraps every row
+// error collected up to and including that one — not just a count, since Stats.RowsSkipped (still
+// populated on this failure path) already gives the count on its own.
+type TooManyRowErrorsError struct {
+	// Errors holds every row error collected before the run stopped, in the order encountered
+	// across every decode worker sharing the run's limit.
+	Errors []error
+	// Limit is the MaxRowErrors value the run was configured with.
+	Limit int
+}
+
+func (e *TooManyRowErrorsError) Error() string {
+	return fmt.Sprintf("%s: limit %d, got %d errors (first: %v)",
+		ErrTooManyRowErrors, e.Limit, len(e.Errors), e.Errors[0])
+}
+
+func (e *TooManyRowErrorsError) Unwrap() error { return ErrTooManyRowErrors }

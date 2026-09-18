@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"streamio/internal/formatio"
 	"streamio/internal/options"
 	"streamio/internal/record"
@@ -18,10 +17,6 @@ import (
 type recordDecoder struct {
 	s *sharedState
 
-	// f is the open input file, held by the decoder NewDecoder returned and nil on every sibling
-	// Split handed out: the file is opened once and closed once.
-	f *os.File
-
 	// lines iterates the chunk this decoder currently owns, nil when it owns none.
 	lines *chunkLines
 
@@ -29,21 +24,15 @@ type recordDecoder struct {
 	json *ObjectDecoder
 }
 
-// NewDecoder opens the NDJSON file at path as a stream of canonical records. Lines are parsed as
-// JSON tokens rather than through reflection, so a scalar field costs no boxing and no map insert.
+// NewDecoder opens src as a stream of canonical records. Lines are parsed as JSON tokens rather
+// than through reflection, so a scalar field costs no boxing and no map insert.
 //
-// The caller owns the returned decoder and must Close it.
+// NewDecoder does not take ownership of src.Reader; the caller closes it, if it needs closing, once
+// done with every decoder Split hands out.
 //
 //nolint:ireturn // formatio.RecordDecoder is the constructor type streamio's format registry stores.
-func NewDecoder(cfg options.Config, path string) (formatio.RecordDecoder, error) {
-	f, s, err := openShared(cfg, path)
-	if err != nil {
-		return nil, err
-	}
-
-	d := s.newRecordDecoder()
-	d.f = f
-	return d, nil
+func NewDecoder(cfg options.Config, src options.Source) (formatio.RecordDecoder, error) {
+	return openShared(cfg, src).newRecordDecoder(), nil
 }
 
 // newRecordDecoder builds one decode worker's decoder over s, with its own scratch and no
@@ -73,13 +62,9 @@ func (d *recordDecoder) Split(limit int) []formatio.RecordDecoder {
 	return decoders
 }
 
-// Close releases the open input file. It is only meaningful on the decoder NewDecoder returned; a
-// Split sibling holds no file and closing it is a no-op.
+// Close is a no-op: recordDecoder does not own src.Reader.
 func (d *recordDecoder) Close() error {
-	if d.f == nil {
-		return nil
-	}
-	return d.f.Close()
+	return nil
 }
 
 // DecodeNext fills batch with the next lines of this decoder's share of the file, claiming further
@@ -113,7 +98,10 @@ func (d *recordDecoder) DecodeNext(ctx context.Context, batch []record.Record) (
 
 		rec, err := d.decodeLine(batch[n], line)
 		if err != nil {
-			return n, err
+			// A malformed line never invalidates d.lines' position in the rest of the chunk — the
+			// next DecodeNext call picks up at the following line — so this is exactly the error
+			// formatio.RowError exists to let the pool skip past under RowErrorSkip.
+			return n, &formatio.RowError{Err: err}
 		}
 		batch[n] = rec
 		n++
@@ -132,7 +120,7 @@ func (d *recordDecoder) openNextChunk() (bool, error) {
 
 	lines, err := d.s.openChunk(chunkIdx, chunkStart)
 	if err != nil {
-		return false, fmt.Errorf("ndjson %s: chunk %d: %w", d.s.path, chunkIdx, err)
+		return false, fmt.Errorf("ndjson %s: chunk %d: %w", d.s.name, chunkIdx, err)
 	}
 
 	d.lines = lines
@@ -143,7 +131,7 @@ func (d *recordDecoder) openNextChunk() (bool, error) {
 func (d *recordDecoder) decodeLine(rec record.Record, line []byte) (record.Record, error) {
 	rec, err := d.json.Decode(rec, line)
 	if err != nil {
-		return rec, fmt.Errorf("ndjson %s: %w", d.s.path, err)
+		return rec, fmt.Errorf("ndjson %s: %w", d.s.name, err)
 	}
 	return rec, nil
 }

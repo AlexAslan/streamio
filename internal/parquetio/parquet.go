@@ -3,7 +3,6 @@
 package parquetio
 
 import (
-	"os"
 	"streamio/internal/options"
 	"sync/atomic"
 
@@ -27,25 +26,13 @@ type sharedState struct {
 	batchSize int
 }
 
-// openShared opens the Parquet file at path and walks its schema once to build the state every
-// decode worker shares. The returned file is owned by the caller and must stay open for as long as
-// the state is used: the row groups read their column chunks straight from it.
-func openShared(cfg options.Config, path string) (*os.File, *sharedState, error) {
-	f, err := os.Open(path)
+// openShared walks src's schema once to build the state every decode worker shares. src.Reader must
+// stay open for as long as the state is used: the row groups read their column chunks straight
+// from it.
+func openShared(cfg options.Config, src options.Source) (*sharedState, error) {
+	pf, err := parquetgo.OpenFile(src.Reader, src.Size)
 	if err != nil {
-		return nil, nil, err
-	}
-
-	stat, err := f.Stat()
-	if err != nil {
-		f.Close()
-		return nil, nil, err
-	}
-
-	pf, err := parquetgo.OpenFile(f, stat.Size())
-	if err != nil {
-		f.Close()
-		return nil, nil, err
+		return nil, err
 	}
 
 	schema := pf.Schema()
@@ -61,8 +48,8 @@ func openShared(cfg options.Config, path string) (*os.File, *sharedState, error)
 
 	if cfg.Logger != nil {
 		msg := "parquet file %s: %d row groups, %d rows total, size: %d bytes"
-		cfg.Logger.Printf(msg, path, len(s.rowGroups), pf.NumRows(), stat.Size())
+		cfg.Logger.Printf(msg, src.Name, len(s.rowGroups), pf.NumRows(), src.Size)
 	}
 
-	return f, s, nil
+	return s, nil
 }

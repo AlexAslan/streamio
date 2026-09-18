@@ -17,6 +17,8 @@ const (
 	FormatCSV = options.FormatCSV
 	// FormatTSV selects tab-separated values.
 	FormatTSV = options.FormatTSV
+	// FormatArrow selects Apache Arrow IPC (the file/random-access variant).
+	FormatArrow = options.FormatArrow
 )
 
 // DocumentHandler is invoked once per output document. It may be called concurrently by multiple
@@ -36,6 +38,14 @@ type (
 
 // TransformRule is a single rename or drop rule built by RenamePath or DropPath.
 type TransformRule = options.PathTransformRule
+
+// ErrTooManyRowErrors is TooManyRowErrorsError's sentinel: check for this failure with errors.Is
+// without depending on the concrete type.
+var ErrTooManyRowErrors = options.ErrTooManyRowErrors
+
+// TooManyRowErrorsError is returned when WithMaxRowErrors' limit is exceeded: it wraps every row
+// error collected up to and including the one that exceeded it.
+type TooManyRowErrorsError = options.TooManyRowErrorsError
 
 // WithInputFormat sets the source file's format explicitly, instead of letting ProcessFile infer
 // it from the file extension.
@@ -115,4 +125,17 @@ func DropPath(path string) TransformRule {
 // encoded into the requested output format.
 func WithTransforms(rules ...TransformRule) Option {
 	return options.WithTransforms(rules...)
+}
+
+// WithMaxRowErrors caps how many rows may fail to decode and be skipped before the run fails,
+// mirroring BigQuery's load-job max_bad_records: n<=0 means fail immediately on the first row
+// error (the default), matching streamio's original behavior. onSkip, if non-nil, is called once
+// per row skipped under the cap. Only NDJSON and CSV/TSV field errors count against the cap — a
+// CSV/TSV syntax error and every Parquet decode error always fail the run regardless of n.
+//
+// Exceeding the cap fails the run with a *TooManyRowErrorsError wrapping every row error collected
+// up to and including the one that exceeded it; Result.Stats.RowsSkipped is still populated on
+// that failure path.
+func WithMaxRowErrors(n int, onSkip func(err error)) Option {
+	return options.WithMaxRowErrors(n, onSkip)
 }

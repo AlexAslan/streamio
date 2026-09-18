@@ -8,7 +8,6 @@ import (
 	"streamio/internal/formatio"
 	"streamio/internal/parquetio"
 	"streamio/internal/record"
-	"strings"
 	"sync"
 	"testing"
 )
@@ -124,7 +123,7 @@ func TestNewDecoder_ClassifiesColumns(t *testing.T) {
 	}
 	path := newRichParquet(t, row)
 
-	dec, err := parquetio.NewDecoder(newConfig(8, 1), path)
+	dec, err := parquetio.NewDecoder(newConfig(8, 1), openSource(t, path))
 	if err != nil {
 		t.Fatalf("NewDecoder: %v", err)
 	}
@@ -257,7 +256,7 @@ func TestNewDecoder_MapColumns(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "maps.parquet")
 			writeParquetRows(t, path, []testRowWithMap{{Name: "row", Attributes: tt.attrs}})
 
-			dec, err := parquetio.NewDecoder(newConfig(8, 1), path)
+			dec, err := parquetio.NewDecoder(newConfig(8, 1), openSource(t, path))
 			if err != nil {
 				t.Fatalf("NewDecoder: %v", err)
 			}
@@ -312,7 +311,7 @@ func TestNewDecoder_NullScalar(t *testing.T) {
 	present := int64(7)
 	writeParquetRows(t, path, []optionalRow{{Name: "a", Extra: nil}, {Name: "b", Extra: &present}})
 
-	dec, err := parquetio.NewDecoder(newConfig(8, 1), path)
+	dec, err := parquetio.NewDecoder(newConfig(8, 1), openSource(t, path))
 	if err != nil {
 		t.Fatalf("NewDecoder: %v", err)
 	}
@@ -356,7 +355,7 @@ func TestNewDecoder_BatchesAndRowGroups(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			path := writeParquetWithRowGroups(t, tt.rows, tt.rowGroup)
 
-			dec, err := parquetio.NewDecoder(newConfig(tt.batchSize, 1), path)
+			dec, err := parquetio.NewDecoder(newConfig(tt.batchSize, 1), openSource(t, path))
 			if err != nil {
 				t.Fatalf("NewDecoder: %v", err)
 			}
@@ -404,7 +403,7 @@ func TestNewDecoder_SplitDividesRowGroups(t *testing.T) {
 	)
 	path := writeParquetWithRowGroups(t, rows, rowGroup)
 
-	dec, err := parquetio.NewDecoder(newConfig(16, workers), path)
+	dec, err := parquetio.NewDecoder(newConfig(16, workers), openSource(t, path))
 	if err != nil {
 		t.Fatalf("NewDecoder: %v", err)
 	}
@@ -465,7 +464,7 @@ func TestNewDecoder_SplitDividesRowGroups(t *testing.T) {
 func TestNewDecoder_SplitCapsAtRowGroupCount(t *testing.T) {
 	path := writeParquetWithRowGroups(t, 6, 3) // two row groups
 
-	dec, err := parquetio.NewDecoder(newConfig(8, 8), path)
+	dec, err := parquetio.NewDecoder(newConfig(8, 8), openSource(t, path))
 	if err != nil {
 		t.Fatalf("NewDecoder: %v", err)
 	}
@@ -489,7 +488,7 @@ func TestNewDecoder_SplitCapsAtRowGroupCount(t *testing.T) {
 func TestNewDecoder_ContextCancellation(t *testing.T) {
 	path := writeParquetWithRowGroups(t, 100, 10)
 
-	dec, err := parquetio.NewDecoder(newConfig(8, 1), path)
+	dec, err := parquetio.NewDecoder(newConfig(8, 1), openSource(t, path))
 	if err != nil {
 		t.Fatalf("NewDecoder: %v", err)
 	}
@@ -508,24 +507,12 @@ func TestNewDecoder_ContextCancellation(t *testing.T) {
 	}
 }
 
-// TestNewDecoder_MissingFile checks the constructor surfaces an open failure rather than returning
-// a decoder that fails later.
-func TestNewDecoder_MissingFile(t *testing.T) {
-	_, err := parquetio.NewDecoder(newConfig(8, 1), filepath.Join(t.TempDir(), "absent.parquet"))
-	if err == nil {
-		t.Fatal("NewDecoder on a missing file returned no error")
-	}
-	if !strings.Contains(err.Error(), "absent.parquet") {
-		t.Errorf("error %q does not name the file", err)
-	}
-}
-
 // TestNewDecoder_EmptyBatch checks the documented "up to len(batch)" contract holds for the
 // degenerate case, without consuming input.
 func TestNewDecoder_EmptyBatch(t *testing.T) {
 	path := writeParquetWithRowGroups(t, 10, 5)
 
-	dec, err := parquetio.NewDecoder(newConfig(8, 1), path)
+	dec, err := parquetio.NewDecoder(newConfig(8, 1), openSource(t, path))
 	if err != nil {
 		t.Fatalf("NewDecoder: %v", err)
 	}

@@ -43,14 +43,18 @@ func RunRecords(
 	}
 	decoders := splitDecoders(dec, cfg.Run.Workers)
 
+	// One tracker shared by every worker, so cfg.MaxRowErrors means the same thing regardless of
+	// how many decode workers are actually running — see formatio.RowErrorTracker's doc.
+	rowErrors := formatio.NewRowErrorTracker(cfg.MaxRowErrors)
+
 	workers := make([]*recordWorker, len(decoders))
-	workers[0] = newRecordWorker(cfg, decoders[0], firstEnc, transformer)
+	workers[0] = newRecordWorker(cfg, decoders[0], firstEnc, transformer, rowErrors)
 	for i := 1; i < len(decoders); i++ {
 		enc, encErr := newEncoder()
 		if encErr != nil {
 			return options.Result{}, encErr
 		}
-		workers[i] = newRecordWorker(cfg, decoders[i], enc, transformer)
+		workers[i] = newRecordWorker(cfg, decoders[i], enc, transformer, rowErrors)
 	}
 
 	return run(ctx, cfg, len(workers),
@@ -74,12 +78,14 @@ func splitDecoders(dec formatio.RecordDecoder, limit int) []formatio.RecordDecod
 	return decoders
 }
 
-// recordWorker is one decode worker's decoder, encoder, and scratch — nothing here is shared with
-// other workers.
+// recordWorker is one decode worker's decoder, encoder, and scratch. Only rowErrors is shared with
+// other workers — see formatio.RowErrorTracker.
 type recordWorker struct {
-	dec         formatio.RecordDecoder
-	enc         formatio.RecordEncoder
-	transformer options.Transformer
+	dec            formatio.RecordDecoder
+	enc            formatio.RecordEncoder
+	transformer    options.Transformer
+	rowErrors      *formatio.RowErrorTracker
+	onRowErrorSkip func(error)
 
 	// batch is the caller-owned batch the decoder refills, per formatio.RecordDecoder's contract.
 	// Its length is also the most rows a single encoded document can cover, for an encoder that
@@ -87,18 +93,22 @@ type recordWorker struct {
 	batch []record.Record
 }
 
-// newRecordWorker pairs one decoder with one encoder and sizes their shared batch.
+// newRecordWorker pairs one decoder with one encoder and sizes their shared batch. rowErrors is
+// shared across every worker RunRecords creates for the same run.
 func newRecordWorker(
 	cfg options.Config,
 	dec formatio.RecordDecoder,
 	enc formatio.RecordEncoder,
 	transformer options.Transformer,
+	rowErrors *formatio.RowErrorTracker,
 ) *recordWorker {
 	return &recordWorker{
-		dec:         dec,
-		enc:         enc,
-		transformer: transformer,
-		batch:       make([]record.Record, cfg.Run.BatchSize),
+		dec:            dec,
+		enc:            enc,
+		transformer:    transformer,
+		rowErrors:      rowErrors,
+		onRowErrorSkip: cfg.OnRowErrorSkip,
+		batch:          make([]record.Record, cfg.Run.BatchSize),
 	}
 }
 
@@ -113,7 +123,7 @@ func (w *recordWorker) decode(ctx context.Context, out chan<- [][]byte, stats *D
 		// Decode and encode are timed as one span: ReadDuration means the time spent turning input
 		// into documents, which on this path is both halves.
 		readStart := time.Now()
-		n, decErr := w.dec.DecodeNext(ctx, w.batch)
+		n, decErr := w.decodeBatch(ctx, stats)
 		transformErr := w.transformBatch(n)
 		var docs [][]byte
 		var encErr error
@@ -149,6 +159,42 @@ func (w *recordWorker) decode(ctx context.Context, out chan<- [][]byte, stats *D
 			return decErr
 		}
 	}
+}
+
+// decodeBatch fills w.batch, retrying past a row-content error the decoder wrapped as a
+// *formatio.RowError — the decoder's own contract for wrapping one guarantees it still leaves the
+// decoder positioned to resume at the next row, so calling DecodeNext again picks up right after
+// the dropped one. w.rowErrors decides whether that skip stays under cfg.MaxRowErrors; once it
+// doesn't, decodeBatch returns a *options.TooManyRowErrorsError instead of continuing. Any other
+// error (io.EOF, a cancelled context, or a plain unwrapped error from a decoder that never
+// distinguishes row content from I/O failures, e.g. Parquet) returns immediately, exactly as
+// streamio behaved before this option existed.
+func (w *recordWorker) decodeBatch(ctx context.Context, stats *DecodeStats) (int, error) {
+	filled := 0
+	for filled < len(w.batch) {
+		n, err := w.dec.DecodeNext(ctx, w.batch[filled:])
+		filled += n
+
+		if err == nil {
+			return filled, nil
+		}
+		var rowErr *formatio.RowError
+		if !errors.As(err, &rowErr) {
+			return filled, err
+		}
+
+		stats.RowsSkipped.Add(1)
+		if w.onRowErrorSkip != nil {
+			w.onRowErrorSkip(err)
+		}
+		if ok := w.rowErrors.Record(err); !ok {
+			return filled, &options.TooManyRowErrorsError{
+				Errors: w.rowErrors.Errors(),
+				Limit:  w.rowErrors.Limit(),
+			}
+		}
+	}
+	return filled, nil
 }
 
 // finalize dispatches the trailing bytes from the worker's encoder, if it implements

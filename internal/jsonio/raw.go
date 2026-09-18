@@ -2,33 +2,28 @@ package jsonio
 
 import (
 	"context"
-	"os"
 	"streamio/internal/formatio"
 	"streamio/internal/options"
 	"streamio/internal/pool"
 )
 
-// rawSource streams an NDJSON file's own lines to the sink. It implements formatio.RawSource.
+// rawSource streams an NDJSON source's own lines to the sink. It implements formatio.RawSource.
 type rawSource struct {
-	f *os.File
 	s *sharedState
 }
 
-// NewRawSource opens the NDJSON file at path for raw passthrough: each dispatched document is one
-// line, handed to the sink as-is. The caller owns the returned source and must Close it.
+// NewRawSource opens src for raw passthrough: each dispatched document is one line, handed to the
+// sink as-is. NewRawSource does not take ownership of src.Reader; the caller closes it, if it needs
+// closing, once done with the returned source.
 //
 //nolint:ireturn // formatio.RawSource is the constructor type streamio's format registry stores.
-func NewRawSource(cfg options.Config, path string) (formatio.RawSource, error) {
-	f, s, err := openShared(cfg, path)
-	if err != nil {
-		return nil, err
-	}
-	return &rawSource{f: f, s: s}, nil
+func NewRawSource(cfg options.Config, src options.Source) (formatio.RawSource, error) {
+	return &rawSource{s: openShared(cfg, src)}, nil
 }
 
-// Close releases the open input file.
+// Close is a no-op: rawSource does not own src.Reader.
 func (r *rawSource) Close() error {
-	return r.f.Close()
+	return nil
 }
 
 // DecodeRaw claims byte-range chunks from the shared queue until none remain or ctx is cancelled.

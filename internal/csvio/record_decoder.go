@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"streamio/internal/formatio"
 	"streamio/internal/options"
 	"streamio/internal/record"
@@ -27,30 +26,25 @@ var errFieldCountMismatch = errors.New("csv: row has a different field count tha
 type recordDecoder struct {
 	s *sharedState
 
-	// f is the open input file, held by the decoder NewDecoder returned and nil on every sibling
-	// Split handed out: the file is opened once and closed once.
-	f *os.File
-
 	// rows reads the chunk this decoder currently owns, nil when it owns none.
 	rows *csvRowReader
 }
 
-// NewDecoder opens the CSV/TSV file at path as a stream of canonical records. The caller owns the
-// returned decoder and must Close it.
+// NewDecoder opens src as a stream of canonical records. NewDecoder does not take ownership of
+// src.Reader; the caller closes it, if it needs closing, once done with every decoder Split hands
+// out.
 //
 //nolint:ireturn // formatio.RecordDecoder is the constructor type streamio's format registry stores.
-func NewDecoder(cfg options.Config, path string) (formatio.RecordDecoder, error) {
-	f, s, err := openShared(cfg, path, cfg.InputFormat)
+func NewDecoder(cfg options.Config, src options.Source) (formatio.RecordDecoder, error) {
+	s, err := openShared(cfg, src, cfg.InputFormat)
 	if err != nil {
 		return nil, err
 	}
 
-	d := s.newRecordDecoder()
-	d.f = f
-	return d, nil
+	return s.newRecordDecoder(), nil
 }
 
-// newRecordDecoder builds one decode worker's decoder over s, with no ownership of the input file.
+// newRecordDecoder builds one decode worker's decoder over s.
 func (s *sharedState) newRecordDecoder() *recordDecoder {
 	return &recordDecoder{s: s}
 }
@@ -75,13 +69,9 @@ func (d *recordDecoder) Split(limit int) []formatio.RecordDecoder {
 	return decoders
 }
 
-// Close releases the open input file. It is only meaningful on the decoder NewDecoder returned; a
-// Split sibling holds no file and closing it is a no-op.
+// Close is a no-op: recordDecoder does not own src.Reader.
 func (d *recordDecoder) Close() error {
-	if d.f == nil {
-		return nil
-	}
-	return d.f.Close()
+	return nil
 }
 
 // DecodeNext fills batch with the next rows of this decoder's share of the file, claiming further
@@ -115,7 +105,12 @@ func (d *recordDecoder) DecodeNext(ctx context.Context, batch []record.Record) (
 
 		rec, err := d.decodeRow(batch[n], fields)
 		if err != nil {
-			return n, err
+			// decodeRow's own field-count check runs after d.rows.next() already returned a
+			// complete row — the reader's position is unaffected by decodeRow rejecting it — so
+			// this, unlike a raw csv.Reader parse error (see next()'s doc for why that one is not
+			// safely skippable), is exactly the error formatio.RowError exists to let the pool skip
+			// past under RowErrorSkip.
+			return n, &formatio.RowError{Err: err}
 		}
 		batch[n] = rec
 		n++
@@ -134,7 +129,7 @@ func (d *recordDecoder) openNextChunk() (bool, error) {
 
 	rows, err := d.s.openChunkRows(chunkIdx, chunkStart)
 	if err != nil {
-		return false, fmt.Errorf("csv %s: chunk %d: %w", d.s.path, chunkIdx, err)
+		return false, fmt.Errorf("csv %s: chunk %d: %w", d.s.name, chunkIdx, err)
 	}
 
 	d.rows = rows
@@ -148,7 +143,7 @@ func (d *recordDecoder) decodeRow(rec record.Record, fields []string) (record.Re
 	header := d.s.ensureHeader(len(fields))
 	if len(fields) != len(header) {
 		return rec, fmt.Errorf("csv %s: %w: got %d fields, want %d",
-			d.s.path, errFieldCountMismatch, len(fields), len(header))
+			d.s.name, errFieldCountMismatch, len(fields), len(header))
 	}
 
 	rec = rec.Reset()
@@ -218,6 +213,13 @@ func (s *sharedState) openChunkRows(chunkIdx, chunkStart int64) (*csvRowReader, 
 // next returns this chunk's next row, or io.EOF once the chunk's share of rows is exhausted. The
 // returned slice is only valid until the next call to next, since the underlying csv.Reader has
 // ReuseRecord set.
+//
+// A parse error from c.r.Read() (e.g. an unterminated quoted field) is deliberately not wrapped as
+// a formatio.RowError: encoding/csv's Reader can consume an unbounded number of further physical
+// lines while looking for a quoted field's closing quote before giving up, so "skip just this row"
+// has no well-defined meaning here — the reader's position after such an error is not guaranteed
+// to be the start of the next row. Only decodeRow's own field-count check, which runs after a
+// complete row has already been read successfully, is safe to treat as skippable.
 func (c *csvRowReader) next() ([]string, error) {
 	if c.r.InputOffset() >= c.stop {
 		return nil, io.EOF

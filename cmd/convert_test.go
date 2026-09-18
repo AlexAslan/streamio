@@ -400,6 +400,120 @@ func TestRunConvert_InvalidCSVDelimiterRejected(t *testing.T) {
 	}
 }
 
+// TestRunConvert_MaxRowErrorsZeroFailsImmediately checks the default --max-row-errors 0 stops the
+// whole conversion on the first malformed line, rather than writing partial or corrupted output.
+func TestRunConvert_MaxRowErrorsZeroFailsImmediately(t *testing.T) {
+	in := filepath.Join(t.TempDir(), "in.ndjson")
+	if err := os.WriteFile(in, []byte("{\"a\":1}\n{\"a\":}\n{\"a\":3}\n"), 0o600); err != nil {
+		t.Fatalf("write ndjson file: %v", err)
+	}
+	out := filepath.Join(t.TempDir(), "out.csv")
+
+	flags := convertFlags{in: in, out: out}
+	if err := runConvert(context.Background(), flags, "csv"); err == nil {
+		t.Fatal("runConvert on a malformed line returned no error")
+	}
+}
+
+// TestRunConvert_MaxRowErrorsAllowsSkipping checks a positive --max-row-errors drops a malformed
+// line under the limit and writes every good row to the output.
+func TestRunConvert_MaxRowErrorsAllowsSkipping(t *testing.T) {
+	in := filepath.Join(t.TempDir(), "in.ndjson")
+	if err := os.WriteFile(in, []byte("{\"a\":1}\n{\"a\":}\n{\"a\":3}\n"), 0o600); err != nil {
+		t.Fatalf("write ndjson file: %v", err)
+	}
+	out := filepath.Join(t.TempDir(), "out.csv")
+
+	flags := convertFlags{in: in, out: out, maxRowErrors: 1}
+	if err := runConvert(context.Background(), flags, "csv"); err != nil {
+		t.Fatalf("runConvert: %v", err)
+	}
+
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("reading %s: %v", out, err)
+	}
+	got := string(data)
+	if !strings.Contains(got, "1") || !strings.Contains(got, "3") {
+		t.Errorf("output = %q, want it to contain both good rows' values", got)
+	}
+}
+
+// TestRunConvert_MaxRowErrorsExceeded checks a positive --max-row-errors still fails the run once
+// the number of malformed rows exceeds it, rather than tolerating an unbounded number of them.
+func TestRunConvert_MaxRowErrorsExceeded(t *testing.T) {
+	in := filepath.Join(t.TempDir(), "in.ndjson")
+	if err := os.WriteFile(in, []byte("{\"a\":}\n{\"a\":}\n{\"a\":3}\n"), 0o600); err != nil {
+		t.Fatalf("write ndjson file: %v", err)
+	}
+	out := filepath.Join(t.TempDir(), "out.csv")
+
+	flags := convertFlags{in: in, out: out, maxRowErrors: 1}
+	if err := runConvert(context.Background(), flags, "csv"); err == nil {
+		t.Fatal("runConvert with 2 malformed lines and --max-row-errors 1 returned no error")
+	}
+}
+
+// TestRunConvert_NegativeMaxRowErrorsRejected checks a negative --max-row-errors fails with an
+// actionable error rather than being silently treated as 0 or unlimited.
+func TestRunConvert_NegativeMaxRowErrorsRejected(t *testing.T) {
+	in := writeNDJSONFixture(t, 5)
+	out := filepath.Join(t.TempDir(), "out.csv")
+
+	flags := convertFlags{in: in, out: out, maxRowErrors: -1}
+	err := runConvert(context.Background(), flags, "csv")
+	if err == nil {
+		t.Fatal("runConvert succeeded, want an error for a negative --max-row-errors")
+	}
+	if !strings.Contains(err.Error(), "--max-row-errors") {
+		t.Errorf("runConvert error = %v, want one mentioning --max-row-errors", err)
+	}
+}
+
+// TestRunConvert_JSONToArrowRoundTrip checks NDJSON input converts to Arrow IPC and back to NDJSON
+// with every row intact, exercising the CLI's --out-format arrow / --in-format arrow wiring.
+func TestRunConvert_JSONToArrowRoundTrip(t *testing.T) {
+	const rows = 25
+	in := writeNDJSONFixture(t, rows)
+	arrowOut := filepath.Join(t.TempDir(), "out.arrow")
+
+	if err := runConvert(context.Background(), convertFlags{in: in, out: arrowOut}, "arrow"); err != nil {
+		t.Fatalf("runConvert (to arrow): %v", err)
+	}
+
+	jsonOut := filepath.Join(t.TempDir(), "roundtrip.json")
+	backFlags := convertFlags{in: arrowOut, out: jsonOut, inFormat: "arrow"}
+	if err := runConvert(context.Background(), backFlags, "json"); err != nil {
+		t.Fatalf("runConvert (back to json): %v", err)
+	}
+	if got := countNDJSONLines(t, jsonOut); got != rows {
+		t.Errorf("round trip produced %d rows, want %d", got, rows)
+	}
+}
+
+// TestRunConvert_ArrowIgnoresWorkersFlag checks --out-format arrow produces a single valid file
+// even when --workers requests more than one, mirroring the identical Parquet coverage — Arrow's
+// writer, like Parquet's, cannot be driven by more than one goroutine at once.
+func TestRunConvert_ArrowIgnoresWorkersFlag(t *testing.T) {
+	const rows = 500
+	in := writeNDJSONFixture(t, rows)
+	arrowOut := filepath.Join(t.TempDir(), "out.arrow")
+
+	flags := convertFlags{in: in, out: arrowOut, batchSize: 10, workers: 8}
+	if err := runConvert(context.Background(), flags, "arrow"); err != nil {
+		t.Fatalf("runConvert (to arrow): %v", err)
+	}
+
+	jsonOut := filepath.Join(t.TempDir(), "roundtrip.json")
+	backFlags := convertFlags{in: arrowOut, out: jsonOut, inFormat: "arrow"}
+	if err := runConvert(context.Background(), backFlags, "json"); err != nil {
+		t.Fatalf("runConvert (back to json): %v", err)
+	}
+	if got := countNDJSONLines(t, jsonOut); got != rows {
+		t.Errorf("round trip produced %d rows, want %d", got, rows)
+	}
+}
+
 // TestFileWriter_ConcurrentWritesDoNotInterleave drives fileWriter.write from many goroutines at
 // once and checks every document appears in the output whole and exactly once: the mutex the type
 // is documented as needing "since decode workers may call the handler concurrently" is otherwise

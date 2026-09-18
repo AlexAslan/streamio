@@ -34,9 +34,9 @@ var (
 	// named columns, so the second would silently displace the first.
 	errDuplicateField = errors.New("parquet: duplicate field name")
 
-	// errMapUnsupported reports a record.KindMap field. See NewEncoder's doc for why this is a
-	// deliberate scope limit rather than an oversight.
-	errMapUnsupported = errors.New("parquet: map fields are not supported by NewEncoder")
+	// errMapUnsupported reports a record.KindMap or record.KindList field. See NewEncoder's doc for
+	// why this is a deliberate scope limit rather than an oversight.
+	errMapUnsupported = errors.New("parquet: map and list fields are not supported by NewEncoder")
 
 	// errUnsupportedKind reports a record.Kind with no Parquet column type, which can only mean a
 	// Kind was added without teaching this encoder about it.
@@ -241,7 +241,7 @@ func nodeFor(name string, value record.Value) (parquetgo.Node, error) {
 		return parquetgo.Leaf(parquetgo.DoubleType), nil
 	case record.KindBytes:
 		return parquetgo.String(), nil
-	case record.KindMap:
+	case record.KindMap, record.KindList:
 		return nil, fmt.Errorf("%w: field %q", errMapUnsupported, name)
 	default:
 		return nil, fmt.Errorf("%w: field %q has kind %v", errUnsupportedKind, name, value.Kind)
@@ -379,7 +379,7 @@ func physicalValue(name string, v record.Value) (parquetgo.Value, error) {
 		// ByteArrayValue references v.Str rather than copying it, which is safe here because the
 		// whole batch is written and the file finalised before the decoder refills these records.
 		return parquetgo.ByteArrayValue(v.Str), nil
-	case record.KindNull, record.KindMap:
+	case record.KindNull, record.KindMap, record.KindList:
 		return parquetgo.Value{}, fmt.Errorf("%w: field %q has kind %v", errUnsupportedKind, name, v.Kind)
 	default:
 		return parquetgo.Value{}, fmt.Errorf("%w: field %q has kind %v", errUnsupportedKind, name, v.Kind)

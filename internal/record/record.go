@@ -2,9 +2,10 @@
 // cross-format conversion goes through between a decoder and an encoder.
 //
 // A Record is a flat []Field of tagged-union Values, not a map[string]any, so decoding a scalar
-// column costs no heap allocation or interface boxing. KindMap is the one exception that nests, for
-// a Parquet-style key/value column group; everything else a decoder can't express in these Kinds is
-// an error rather than an invented representation.
+// column costs no heap allocation or interface boxing. KindMap and KindList are the two exceptions
+// that nest — a Parquet-style key/value column group, and an ordered JSON array, respectively;
+// everything else a decoder can't express in these Kinds is an error rather than an invented
+// representation.
 package record
 
 // Kind is the physical type a Value carries. It selects which of Value's fixed fields holds the
@@ -24,6 +25,8 @@ const (
 	KindBytes
 	// KindMap reads Value.Map, a nested Record holding one key/value column group's entries.
 	KindMap
+	// KindList reads Value.List, an ordered slice of nested Values holding a JSON array's elements.
+	KindList
 )
 
 // String returns the Kind's name, for diagnostics.
@@ -41,6 +44,8 @@ func (k Kind) String() string {
 		return "bytes"
 	case KindMap:
 		return "map"
+	case KindList:
+		return "list"
 	default:
 		return "unknown"
 	}
@@ -104,6 +109,8 @@ type Value struct {
 	Str []byte
 	// Map is valid for KindMap.
 	Map Record
+	// List is valid for KindList, holding its elements in their original order.
+	List []Value
 	// I64 is valid for KindInt64.
 	I64 int64
 	// F64 is valid for KindFloat64 (including SemanticFloat32-tagged values).
@@ -154,6 +161,13 @@ func Bytes(b []byte) Value {
 // for the next row.
 func Map(entries Record) Value {
 	return Value{Kind: KindMap, Map: entries}
+}
+
+// List returns a Value holding elements as an ordered nested sequence, referencing them without
+// copying — the same lifetime Bytes implies, so a decoder is free to hand over scratch it refills
+// for the next row.
+func List(elements []Value) Value {
+	return Value{Kind: KindList, List: elements}
 }
 
 // IsNull reports whether v carries no data.

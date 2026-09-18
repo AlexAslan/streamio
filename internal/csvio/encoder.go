@@ -12,9 +12,10 @@ import (
 // mean a Kind was added without teaching the encoders about it.
 var errUnsupportedKind = errors.New("csv: unsupported value kind")
 
-// errMapUnsupported reports a record.KindMap field: CSV has no nested-value representation, so a
-// map column has nowhere to go. Mirrors parquetio.NewEncoder's identical scope limit.
-var errMapUnsupported = errors.New("csv: map fields are not supported")
+// errMapUnsupported reports a record.KindMap or record.KindList field: CSV has no nested-value
+// representation, so a map or list column has nowhere to go. Mirrors parquetio.NewEncoder's
+// identical scope limit.
+var errMapUnsupported = errors.New("csv: map and list fields are not supported")
 
 // errSchemaMismatch reports a record whose field count or names don't match the header the first
 // batch fixed.

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"os"
 	"streamio/internal/formatio"
 	"streamio/internal/options"
 	"streamio/internal/pool"
@@ -13,30 +12,29 @@ import (
 	parquetgo "github.com/parquet-go/parquet-go"
 )
 
-// rawSource streams a Parquet file's own bytes to the sink, one standalone row group per document.
-// It implements formatio.RawSource.
+// rawSource streams a Parquet source's own bytes to the sink, one standalone row group per
+// document. It implements formatio.RawSource.
 type rawSource struct {
-	f    *os.File
 	s    *sharedState
-	path string
+	name string
 }
 
-// NewRawSource opens the Parquet file at path for raw passthrough: each dispatched document is one
-// of the file's row groups, re-framed as a self-contained Parquet file. The caller owns the
-// returned source and must Close it.
+// NewRawSource opens src for raw passthrough: each dispatched document is one of the source's row
+// groups, re-framed as a self-contained Parquet file. NewRawSource does not take ownership of
+// src.Reader; the caller closes it, if it needs closing, once done with the returned source.
 //
 //nolint:ireturn // formatio.RawSource is the constructor type streamio's format registry stores.
-func NewRawSource(cfg options.Config, path string) (formatio.RawSource, error) {
-	f, s, err := openShared(cfg, path)
+func NewRawSource(cfg options.Config, src options.Source) (formatio.RawSource, error) {
+	s, err := openShared(cfg, src)
 	if err != nil {
 		return nil, err
 	}
-	return &rawSource{f: f, s: s, path: path}, nil
+	return &rawSource{s: s, name: src.Name}, nil
 }
 
-// Close releases the open input file.
+// Close is a no-op: rawSource does not own src.Reader.
 func (r *rawSource) Close() error {
-	return r.f.Close()
+	return nil
 }
 
 // DecodeRaw claims row groups from the shared queue until none remain or ctx is cancelled, sending
@@ -59,7 +57,7 @@ func (r *rawSource) DecodeRaw(ctx context.Context, out chan<- [][]byte, stats *p
 
 		doc, err := r.extractRowGroup(ctx, rg, &buf, stats)
 		if err != nil {
-			return fmt.Errorf("parquet %s: row group %d: %w", r.path, idx, err)
+			return fmt.Errorf("parquet %s: row group %d: %w", r.name, idx, err)
 		}
 
 		// Count rows, not dispatched items: one item here is a whole row group, so the pool's

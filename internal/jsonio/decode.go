@@ -29,7 +29,7 @@ func (d *chunkDecoder) Decode(ctx context.Context, out chan<- [][]byte, stats *p
 		}
 
 		if err := d.s.processChunk(ctx, chunkIdx, chunkStart, d.rb, out, stats); err != nil {
-			return fmt.Errorf("ndjson %s: chunk %d: %w", d.s.path, chunkIdx, err)
+			return fmt.Errorf("ndjson %s: chunk %d: %w", d.s.name, chunkIdx, err)
 		}
 	}
 }

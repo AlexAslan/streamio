@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"os"
 	"streamio/internal/formatio"
 	"streamio/internal/options"
 	"streamio/internal/record"
@@ -17,10 +16,6 @@ import (
 // formatio.SplittableRecordDecoder.
 type recordDecoder struct {
 	s *sharedState
-
-	// f is the open input file, held by the decoder NewDecoder returned and nil on every sibling
-	// Split handed out: the file is opened once and closed once.
-	f *os.File
 
 	// reader is the current row group's reader, nil when none is open.
 	reader *parquetgo.GenericReader[any]
@@ -45,19 +40,18 @@ type recordDecoder struct {
 	slotHeld bool
 }
 
-// NewDecoder opens the Parquet file at path as a stream of canonical records. The caller owns the
-// returned decoder and must Close it.
+// NewDecoder opens src as a stream of canonical records. NewDecoder does not take ownership of
+// src.Reader; the caller closes it, if it needs closing, once done with every decoder Split hands
+// out. The caller must still Close the returned decoder, to release any row group reader it holds.
 //
 //nolint:ireturn // formatio.RecordDecoder is the constructor type streamio's format registry stores.
-func NewDecoder(cfg options.Config, path string) (formatio.RecordDecoder, error) {
-	f, s, err := openShared(cfg, path)
+func NewDecoder(cfg options.Config, src options.Source) (formatio.RecordDecoder, error) {
+	s, err := openShared(cfg, src)
 	if err != nil {
 		return nil, err
 	}
 
-	d := s.newRecordDecoder()
-	d.f = f
-	return d, nil
+	return s.newRecordDecoder(), nil
 }
 
 // newRecordDecoder builds one decode worker's decoder over s, with its own scratch and no
@@ -94,15 +88,10 @@ func (d *recordDecoder) Split(limit int) []formatio.RecordDecoder {
 	return decoders
 }
 
-// Close releases the open input file, and any row group this decoder still holds. It is only
-// meaningful on the decoder NewDecoder returned; a Split sibling holds no file and closing it is a
-// no-op beyond releasing its own reader.
+// Close releases any row group this decoder still holds; it does not own src.Reader.
 func (d *recordDecoder) Close() error {
 	d.closeRowGroup()
-	if d.f == nil {
-		return nil
-	}
-	return d.f.Close()
+	return nil
 }
 
 // DecodeNext fills batch with the next rows of this decoder's share of the file, crossing row
