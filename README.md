@@ -509,197 +509,70 @@ field count, as expected for a single linear scan per record.
 go test ./cmd/... -bench=BenchmarkRunConvert -benchmem -run '^$'
 ```
 
-This now covers all 5×5 = 25 in→out pairs across every format the CLI supports, not just a
-hand-picked subset — `cmd/convert_bench_test.go`'s `benchAllPairCases` builds one fixture per format
-and generates every pair programmatically, the same matrix
-`TestConvertMatrix_AllFormatPairs` (`cmd/convert_matrix_test.go`) verifies for correctness.
+Covers all 5×5 = 25 in→out pairs across every format the CLI supports (`cmd/convert_bench_test.go`'s
+`benchAllPairCases`), the same matrix `TestConvertMatrix_AllFormatPairs`
+(`cmd/convert_matrix_test.go`) verifies for correctness.
 
-| in ＼ out | json | parquet | csv | tsv | arrow |
-|---|---|---|---|---|---|
-| **json** | 156.3 | 337.5 | 323.0 | 332.8 | 294.9 |
-| **parquet** | 281.4 | 221.9 | 192.5 | 192.3 | 167.5 |
-| **csv** | 329.2 | 209.7 | 179.9 | 177.9 | 177.2 |
-| **tsv** | 249.2 | 205.3 | 178.2 | 175.5 | 160.3 |
-| **arrow** | 227.9 | 176.1 | 165.6 | 164.1 | 125.7 |
+**20,000 rows:**
 
-(ns/row, 20,000 rows; full `B/op`/`allocs/op` per case are in the benchmark's own output, not
-reproduced here for space)
+| in → out | ns/row | B/op | allocs/op |
+|---|---|---|---|
+| json→json | 156.3 | 35,042,328 | 40,106 |
+| json→parquet | 337.5 | 35,766,808 | 82,628 |
+| json→csv | 323.0 | 35,384,360 | 81,194 |
+| json→tsv | 332.8 | 35,386,360 | 81,203 |
+| json→arrow | 294.9 | 36,781,248 | 83,422 |
+| parquet→json | 281.4 | 3,982,648 | 83,317 |
+| parquet→parquet | 221.9 | 3,486,944 | 44,200 |
+| parquet→csv | 192.5 | 2,999,856 | 42,745 |
+| parquet→tsv | 192.3 | 3,023,544 | 42,738 |
+| parquet→arrow | 167.5 | 4,469,608 | 45,005 |
+| csv→json | 329.2 | 36,086,368 | 101,165 |
+| csv→parquet | 209.7 | 35,388,616 | 62,557 |
+| csv→csv | 179.9 | 35,067,776 | 61,202 |
+| csv→tsv | 177.9 | 35,067,264 | 61,198 |
+| csv→arrow | 177.2 | 36,579,152 | 63,779 |
+| tsv→json | 249.2 | 36,086,368 | 101,165 |
+| tsv→parquet | 205.3 | 35,390,536 | 62,564 |
+| tsv→csv | 178.2 | 35,069,776 | 61,212 |
+| tsv→tsv | 175.5 | 35,069,776 | 61,212 |
+| tsv→arrow | 160.3 | 36,579,728 | 63,783 |
+| arrow→json | 227.9 | 2,381,560 | 62,249 |
+| arrow→parquet | 176.1 | 1,902,080 | 23,710 |
+| arrow→csv | 165.6 | 1,521,112 | 22,280 |
+| arrow→tsv | 164.1 | 1,521,640 | 22,284 |
+| arrow→arrow | 125.7 | 2,919,816 | 24,522 |
 
-The ranking tracks exactly how much of each row the route actually has to touch. json→json is the
-one case left on the original raw-passthrough path — `WithSingleFileOutput` only ever gets set when
-`--out-format` is `parquet`, `arrow`, or CSV/TSV (see `runConvert`), so this route never decodes a
-value or builds a `record.Record` at all; it's a byte-range chunk read plus a buffered write with a
-newline appended. Every other cell pays for at least one real decode or encode. json→* is
-consistently the slowest *row* in the matrix, since JSON parsing itself is the one decode route
-with no columnar shortcut; arrow and parquet as *inputs* are consistently cheap, since claiming a
-record batch or row group and decoding its already-typed values costs less than JSON's per-byte
-parse. arrow→arrow is the single fastest cross-format cell (125.7 ns/row) — Arrow has no raw
-passthrough (see the Arrow IPC section above), so this is entirely decode-then-re-encode, still
-faster than parquet→parquet's own decode/re-encode-with-splicing path because Arrow's columnar
-builders have less framing overhead per batch than Parquet's row-group footer/page-index
-machinery. json→parquet is the single slowest cell (337.5 ns/row): deriving a schema and building
-columnar rows from freshly-parsed JSON values is the most expensive combination of decode and
-encode cost in the matrix.
+At 10,000,000 rows (`BenchmarkRunConvert_LargeScale`, not run by default —
+`go test ./cmd/... -bench=BenchmarkRunConvert_LargeScale -benchmem -run '^$' -timeout=30m`):
 
-**NDJSON → CSV/TSV's `allocs/op` dropped 33% (121,304/121,305 → 81,181) with `ns/row` essentially
-unchanged (290.5 → 314.3/299.2, within this benchmark's own several-percent run-to-run noise floor
-— confirmed by re-running the untouched CSV → NDJSON case, which showed the same spread across
-repeats).** `internal/csvio`'s encoder used to build a `[]string` per row and hand it to
-`encoding/csv.Writer.Write`, which the `Write([]string)` signature forces: even after avoiding an
-intermediate formatting buffer, every field still had to become a real Go string. The encoder now
-skips `encoding/csv.Writer` entirely for output — `internal/csvio/row.go`'s `rowWriter` renders
-each field straight into a reused `bytes.Buffer`, reimplementing `encoding/csv.Writer`'s own
-RFC 4180 quoting/escaping logic instead of driving it through the `[]string` API — so a field's
-formatted bytes go straight from `strconv.AppendInt`/`jsonio.AppendFloat` into the final row, no
-string ever created.
-
-The 81,181 allocs/op (and 35.3 MB `B/op`) the CLI benchmark reports for a 20,000-row NDJSON→CSV run
-isn't mostly the CSV encoder's own cost: a memory profile of that benchmark shows well over 90% of
-its allocated *bytes* come from `bufio.NewReaderSize` — the read buffers `openShared` builds per
-decode worker for the NDJSON *input* — a cost every NDJSON-input route in this table already pays,
-untouched by this change. Isolated from the rest of the pipeline (one `csvio.NewEncoder` driven
-directly over many 512-row batches, matching this library's own default `BatchSize`), the CSV
-encoder itself allocates about 9.5 KB and 2 allocations *per batch* — roughly 18.5 bytes/row,
-against a real per-batch document size of about 9.1 KB, i.e. barely any overshoot. That number
-only reached this floor after a second fix: the first version of this rewrite built a fresh
-`rowWriter` (and its `bytes.Buffer`) inside every `EncodeBatch` call, so that buffer regrew from
-empty via Go's doubling strategy on every single batch instead of reusing capacity across
-batches — 19 allocations and 42.4 KB per 512-row batch, roughly **4.7× the batch's own document
-size**, purely from repeated regrowth. Making `rowWriter` a field on `encoder`/`streamingEncoder`,
-reset per batch instead of rebuilt, cut that to the 2-allocation, near-zero-overshoot number above
-— a 78%-fewer-bytes, 89%-fewer-allocations improvement measured in isolation, even though it barely
-moves the CLI benchmark's own `B/op` figure, since that figure is dominated by the unrelated
-input-side read-buffer cost described above.
-
-A hand-rolled quoting/escaping reimplementation is exactly the kind of small-but-easy-to-get-wrong
-logic worth distrusting on sight — it was verified against the real `encoding/csv.Writer`, not just
-tested against hand-picked cases: `TestEncode_MatchesEncodingCSVQuoting_Fuzz`
-(`internal/csvio/quoting_test.go`) generates random fields from an alphabet covering every RFC 4180
-special character (delimiter, quote, `\n`, `\r`, Unicode), asserts the new encoder's byte output is
-identical to `encoding/csv.Writer`'s for the same input, and round-trips the result through a real
-`csv.Reader` to confirm it decodes back to the original values — run 45 times (13,500 total random
-cases) during development with no mismatch. The two near-misses that surfaced along the way
-(`csv.Reader` normalizing an embedded `\r\n` to `\n` on read, and a single empty field encoding as
-an indistinguishable blank line) both turned out to be `encoding/csv`'s own documented behavior,
-reproduced identically by both writers — not bugs introduced here.
-
-**CSV → NDJSON used to be the clear outlier here — 2–3× every other conversion — because of how
-`internal/csvio`'s decoder drove `encoding/csv`, not because of `encoding/csv` itself.** The
-original decoder built a brand-new `csv.Reader` (and a `bytes.Reader` under it) for *every row*,
-parsed exactly one row with it, then discarded it — so none of `encoding/csv`'s own internal
-buffering, and none of its `ReuseRecord` option, ever got a chance to help. The fix
-(`internal/csvio/record_decoder.go`'s `csvRowReader`) drives one persistent `*csv.Reader` per
-claimed chunk instead, reading many rows off one continuous stream with `ReuseRecord: true`. That
-also fixed a real, previously-documented correctness gap as a side effect: `encoding/csv.Reader`
-already tokenizes rows itself, including a literal newline inside a quoted field spanning two
-physical lines, which the *old* decoder's external physical-line splitter could not tell apart
-from a genuine row terminator (see `TestNewDecoder_QuotedNewlineSingleWorker` in
-`internal/csvio/record_decoder_test.go`). This remains a known limitation for a *multi-worker* run
-against a file containing quoted newlines specifically at a chunk boundary — see
-`internal/csvio/csvio.go`'s `openChunkReader` doc comment for why that can't be fixed by a local
-byte scan — but the per-row allocation cost this section originally documented is resolved.
-
-`cmd/writer.go`'s `fileWriter` originally wrote every document straight to the underlying
-`*os.File` with no buffering, costing NDJSON output two raw `Write` syscalls per row (the document,
-then its separator) — 40,000 syscalls for this 20,000-row fixture. That was exactly the kind of
-concrete, number-backed finding a benchmark is supposed to surface: the very first version of this
-benchmark measured NDJSON output at **2,488 ns/row**, nearly 40× slower than the 57.7 ns/row
-above. Wrapping `fileWriter`'s destination in a `bufio.Writer` (flushed on `close`) fixed it —
-NDJSON output is now the *faster* of the two formats, as expected, since Parquet still has to
-derive a schema and build columnar rows per batch.
-
-**Adding the Parquet-input cases surfaced a real correctness bug, not just two more rows in a
-table.** Parquet-to-Parquet used to take the raw-passthrough route regardless of `--out-format`'s
-single-file contract — dispatching one complete, independently-closed Parquet file per input row
-group and concatenating them into `--out` with no separator. For any input with more than one row
-group (i.e. any real-sized file), the result wasn't a valid Parquet file past the first row
-group's footer; `parquetgo.OpenFile` on it failed outright with `reading page index of parquet
-file: ...`. Fixed in `streamio.go`: `ProcessFile` now rules raw passthrough out whenever
-`WithSingleFileOutput` is set, even when the input and output formats match, and decodes to
-records and re-encodes through `streamingEncoder` instead — trading raw passthrough's verbatim
-byte-splice optimization for a file that's actually valid. Pinned by
-`TestRunConvert_ParquetToParquetProducesOneValidFile` in `cmd/convert_test.go`. Parquet-to-Parquet
-being noticeably *cheaper* than either Parquet-to-NDJSON or NDJSON-to-Parquet above (181.6 ns/row,
-with far fewer allocations) is expected even after the fix: parquet-go's `WriteRowGroup` still
-splices already-compressed column chunks straight through on the decode side wherever the schema
-lets it (see `raw.go`), so this route pays for one schema derivation and one re-framing pass, not a
-full per-value decode/re-encode.
-
-At 10,000,000 rows (`BenchmarkRunConvert_LargeScale`, not run by default — see its doc comment for
-why — `go test ./cmd/... -bench=BenchmarkRunConvert_LargeScale -benchmem -run '^$' -timeout=30m`).
-This benchmark used to run at 100,000,000 rows across the 7-pair subset that predates the full
-25-pair matrix; extending it to all 25 pairs at that row count would take upward of ten minutes, so
-the row count was cut to 10,000,000 — still large enough to confirm steady-state throughput and to
-exercise `--batch-size`'s row-group/record-batch cap sizing, just no longer the "does this hold at
-5,000× scale" data point the original 100,000,000-row numbers below were measured against; treat
-the historical comparisons in this subsection as measured at the time, not reproducible verbatim
-against the current benchmark:
-
-| in ＼ out | json | parquet | csv | tsv | arrow |
-|---|---|---|---|---|---|
-| **json** | 45.0 | 316.5 | 331.6 | 332.5 | 279.6 |
-| **parquet** | 253.2 | 187.4 | 203.7 | 201.8 | 147.8 |
-| **csv** | 241.7 | 193.9 | 183.4 | 183.7 | 142.3 |
-| **tsv** | 241.4 | 194.1 | 185.0 | 183.3 | 144.3 |
-| **arrow** | 234.3 | 161.2 | 175.7 | 176.6 | 133.3 |
-
-(ns/row, 10,000,000 rows)
-
-Every route's ns/row holds roughly steady from 20,000 rows to 10,000,000 (a 500× scale increase),
-for every format the CLI supports, and the same shape holds: json→* stays the slowest row, and
-arrow→arrow stays the single fastest cell (133.3 ns/row) for the same reasons given above. Parquet
-and Arrow input/output cases use `--batch-size 1000` (10,000 row groups/record batches for
-10,000,000 rows) rather than the library default, for the reason explained in
-`BenchmarkRunConvert_LargeScale`'s doc comment. This is the direct evidence that the CLI's
-throughput characteristics measured at a small, fast-to-benchmark fixture size actually hold at a
-substantially larger scale, across every route.
-
-**CSV → NDJSON's fix holds at scale, and holds better than the 20,000-row numbers alone would
-suggest** (this comparison predates the current 10,000,000-row benchmark; see above). At 20,000
-rows, reusing one `csv.Reader` per chunk instead of one per row cut ns/row by
-2.4× (623.4 → 255.1) and `B/op` by 3.4× (123,731,497 → 36,053,005). At 100,000,000 rows the same
-fix cuts ns/row by 2.5× (604.4 → 242.1) — consistent with the small-scale measurement — but cuts
-`B/op` by **31×** (454,514,630,744 → 14,523,277,496), a far bigger win than the 20,000-row number
-predicted. The reason is exactly the gap this section used to warn about: the *old* decoder's
-per-row `csv.Reader` allocation didn't amortize at all, so its `B/op` scaled almost linearly with
-row count (3,673× for a 5,000× row increase) while every other route's buffered I/O let `B/op`
-scale sublinearly (NDJSON → NDJSON's `B/op` grew only 324× for that same 5,000× increase). Fixing
-the allocation *pattern* — not just its per-row constant — means CSV → NDJSON's `B/op` now scales
-the same sublinear way every other route's does: it's **1.28× NDJSON → NDJSON's `B/op`** at
-100,000,000 rows (down from 40×), and its ns/row is now within a few percent of Parquet →
-NDJSON's — the two routes that do the same shape of work (one decode, one JSON encode) now cost
-about the same, which is the expected outcome once CSV's decode no longer pays a per-row penalty
-the other formats don't.
-
-**NDJSON → CSV/TSV's allocation count holds the same ~33% reduction at 100,000,000 rows it showed
-at 20,000** (400,392,302 vs. the pre-rewrite 601,759,216, a 33.5% cut, matching the 20,000-row
-run's 33% almost exactly) — replacing `encoding/csv.Writer`'s `[]string`-per-row API with
-`internal/csvio/row.go`'s `rowWriter` writing straight into a reused buffer removes one allocation
-per field regardless of scale. `ns/row` again moves within the same few-percent band every route
-shows run-to-run (confirmed against the untouched CSV → NDJSON case).
-
-**`B/op` tells a second, scale-dependent story: a buffer-lifetime bug in the first version of this
-rewrite, fixed after it was caught by exactly this kind of measurement.** The first working version
-of the byte-native encoder built a brand-new `rowWriter` — and therefore a brand-new, empty
-`bytes.Buffer` — inside every single `EncodeBatch` call, so that buffer had to regrow from nothing
-via Go's doubling strategy on every batch instead of reusing capacity from the batch before it.
-Isolated in a microbenchmark (many 512-row batches through one long-lived `csvio.NewEncoder`, this
-library's own default `BatchSize`), that cost 42.4 KB and 19 allocations per batch to produce a
-9.1 KB document — **roughly 4.7× the document's own size**, pure regrowth overhead. Making
-`rowWriter` a persistent field on `encoder`/`streamingEncoder`, reset per batch instead of rebuilt,
-cut that to 9.5 KB and 2 allocations per batch — under 4% overshoot instead of 370%. At
-100,000,000 rows (195,313 batches at the default batch size), that per-batch regrowth penalty
-compounds far more visibly than it did in the 20,000-row table above (only 40 batches): `B/op`
-drops from 19.7 GB to **13.4 GB**, a further 6.4 GB (32%) beyond what the `[]string`-removal alone
-had already saved, versus roughly 621 KB of difference the same fix made at 20,000 rows. Combined,
-the two fixes take NDJSON → CSV from the original 22.2 GB down to 13.4 GB — a 40% total reduction
-in bytes allocated, alongside the 33% allocation-count cut — for the exact same 100,000,000-row
-conversion. The lesson this pair of fixes leaves behind: a per-batch allocation cost that looks
-negligible at a small, fast benchmark size can be the dominant one at the scale the batch size was
-actually chosen for, which is exactly why this README re-runs `BenchmarkRunConvert_LargeScale`
-rather than trusting the small-scale numbers to extrapolate on their own — even though that
-benchmark's own row count has since been reduced from 100,000,000 to 10,000,000 to keep the full
-25-pair matrix runnable in a reasonable time (see above).
+| in → out | ns/row | B/op | allocs/op |
+|---|---|---|---|
+| json→json | 45.0 | 1,122,880,296 | 20,019,668 |
+| json→parquet | 316.5 | 1,321,332,016 | 40,345,223 |
+| json→csv | 331.6 | 1,286,628,248 | 40,040,242 |
+| json→tsv | 332.5 | 1,286,627,608 | 40,040,236 |
+| json→arrow | 279.6 | 2,026,530,088 | 40,622,222 |
+| parquet→json | 253.2 | 1,926,175,632 | 41,033,419 |
+| parquet→parquet | 187.4 | 1,257,725,800 | 20,876,320 |
+| parquet→csv | 203.7 | 1,396,538,120 | 21,052,446 |
+| parquet→tsv | 201.8 | 1,396,388,472 | 21,052,324 |
+| parquet→arrow | 147.8 | 1,963,416,328 | 21,153,902 |
+| csv→json | 241.7 | 1,428,549,464 | 50,020,717 |
+| csv→parquet | 193.9 | 895,966,944 | 30,324,501 |
+| csv→csv | 183.4 | 872,458,056 | 30,040,261 |
+| csv→tsv | 183.7 | 872,458,008 | 30,040,260 |
+| csv→arrow | 142.3 | 1,737,589,880 | 30,722,241 |
+| tsv→json | 241.4 | 1,428,549,208 | 50,020,713 |
+| tsv→parquet | 194.1 | 895,503,304 | 30,324,350 |
+| tsv→csv | 185.0 | 872,458,712 | 30,040,260 |
+| tsv→tsv | 183.3 | 872,457,736 | 30,040,258 |
+| tsv→arrow | 144.3 | 1,737,590,072 | 30,722,244 |
+| arrow→json | 234.3 | 1,176,534,880 | 30,290,728 |
+| arrow→parquet | 161.2 | 663,929,072 | 10,617,681 |
+| arrow→csv | 175.7 | 621,880,032 | 10,310,231 |
+| arrow→tsv | 176.6 | 621,878,384 | 10,310,214 |
+| arrow→arrow | 133.3 | 1,361,788,664 | 10,892,279 |
 
 ## Package layout
 
