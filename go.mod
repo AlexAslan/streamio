@@ -1,4 +1,4 @@
-module streamio
+module github.com/AlexAslan/streamio
 
 go 1.27
 

@@ -7,12 +7,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"streamio"
 	"strings"
 	"sync"
 	"testing"
 
 	parquetgo "github.com/parquet-go/parquet-go"
+
+	"github.com/AlexAslan/streamio"
 )
 
 // convertTestParquetRow is the fixture row shape for the Parquet-input tests: wide enough (an int

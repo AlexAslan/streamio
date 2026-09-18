@@ -4,12 +4,13 @@ import (
 	"context"
 	"errors"
 	"runtime"
-	"streamio/internal/options"
-	"streamio/internal/pool"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/AlexAslan/streamio/internal/options"
+	"github.com/AlexAslan/streamio/internal/pool"
 )
 
 // docsRawSource is a formatio.RawSource that hands the i-th concurrent DecodeRaw call

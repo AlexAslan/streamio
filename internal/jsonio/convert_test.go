@@ -3,9 +3,10 @@ package jsonio_test
 import (
 	"context"
 	"os"
-	"streamio/internal/jsonio"
-	"streamio/internal/options"
-	"streamio/internal/pool"
+
+	"github.com/AlexAslan/streamio/internal/jsonio"
+	"github.com/AlexAslan/streamio/internal/options"
+	"github.com/AlexAslan/streamio/internal/pool"
 )
 
 // convertFile decodes the newline-delimited JSON file at path and calls sink once per line. It is

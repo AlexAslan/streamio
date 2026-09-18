@@ -2,12 +2,13 @@ package jsonio_test
 
 import (
 	"math"
-	"streamio/internal/formatio"
-	"streamio/internal/jsonio"
-	"streamio/internal/options"
-	"streamio/internal/record"
 	"strings"
 	"testing"
+
+	"github.com/AlexAslan/streamio/internal/formatio"
+	"github.com/AlexAslan/streamio/internal/jsonio"
+	"github.com/AlexAslan/streamio/internal/options"
+	"github.com/AlexAslan/streamio/internal/record"
 )
 
 // newEncoder builds an encoder, failing the test if the constructor does.

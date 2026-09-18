@@ -2,10 +2,11 @@ package csvio_test
 
 import (
 	"context"
-	"streamio/internal/csvio"
-	"streamio/internal/formatio"
-	"streamio/internal/options"
 	"testing"
+
+	"github.com/AlexAslan/streamio/internal/csvio"
+	"github.com/AlexAslan/streamio/internal/formatio"
+	"github.com/AlexAslan/streamio/internal/options"
 )
 
 // drainRawSource claims chunks until src reports it is exhausted, returning the row bytes it

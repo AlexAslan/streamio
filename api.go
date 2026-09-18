@@ -2,7 +2,8 @@ package streamio
 
 import (
 	"context"
-	"streamio/internal/options"
+
+	"github.com/AlexAslan/streamio/internal/options"
 )
 
 // Format identifies an input or output document encoding.

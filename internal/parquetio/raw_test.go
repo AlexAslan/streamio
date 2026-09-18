@@ -7,14 +7,15 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
-	"streamio/internal/options"
-	"streamio/internal/parquetio"
-	"streamio/internal/pool"
 	"sync"
 	"sync/atomic"
 	"testing"
 
 	parquetgo "github.com/parquet-go/parquet-go"
+
+	"github.com/AlexAslan/streamio/internal/options"
+	"github.com/AlexAslan/streamio/internal/parquetio"
+	"github.com/AlexAslan/streamio/internal/pool"
 )
 
 // errRawTestSink is the static sentinel the sink-failure test returns, per the repo's

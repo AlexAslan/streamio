@@ -3,11 +3,12 @@
 package parquetio
 
 import (
-	"streamio/internal/options"
 	"sync/atomic"
 
 	parquetgo "github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/format"
+
+	"github.com/AlexAslan/streamio/internal/options"
 )
 
 type columnMeta struct {

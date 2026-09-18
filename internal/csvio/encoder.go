@@ -3,9 +3,10 @@ package csvio
 import (
 	"errors"
 	"fmt"
-	"streamio/internal/formatio"
-	"streamio/internal/options"
-	"streamio/internal/record"
+
+	"github.com/AlexAslan/streamio/internal/formatio"
+	"github.com/AlexAslan/streamio/internal/options"
+	"github.com/AlexAslan/streamio/internal/record"
 )
 
 // errUnsupportedKind reports a record.Kind this encoder has no CSV rendering for, which can only

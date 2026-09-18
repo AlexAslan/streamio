@@ -4,13 +4,14 @@ package pool
 
 import (
 	"context"
-	"streamio/internal/formatio"
-	"streamio/internal/options"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"golang.org/x/sync/errgroup"
+
+	"github.com/AlexAslan/streamio/internal/formatio"
+	"github.com/AlexAslan/streamio/internal/options"
 )
 
 // DecodeStats is formatio.DecodeStats under the name the pool's own callers use.

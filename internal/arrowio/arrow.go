@@ -5,11 +5,12 @@ package arrowio
 
 import (
 	"io"
-	"streamio/internal/options"
 	"sync/atomic"
 
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/ipc"
+
+	"github.com/AlexAslan/streamio/internal/options"
 )
 
 // sharedState is read-only once built (aside from its atomic) and shared by every decode worker.

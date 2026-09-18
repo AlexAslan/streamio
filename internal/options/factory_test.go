@@ -1,8 +1,9 @@
 package options_test
 
 import (
-	"streamio/internal/options"
 	"testing"
+
+	"github.com/AlexAslan/streamio/internal/options"
 )
 
 func TestNew_Defaults(t *testing.T) {

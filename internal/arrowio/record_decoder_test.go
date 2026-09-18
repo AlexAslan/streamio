@@ -5,15 +5,16 @@ import (
 	"errors"
 	"io"
 	"os"
-	"streamio/internal/arrowio"
-	"streamio/internal/formatio"
-	"streamio/internal/record"
 	"testing"
 
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/ipc"
 	"github.com/apache/arrow-go/v18/arrow/memory"
+
+	"github.com/AlexAslan/streamio/internal/arrowio"
+	"github.com/AlexAslan/streamio/internal/formatio"
+	"github.com/AlexAslan/streamio/internal/record"
 )
 
 // materialised is a decoded record copied out of the decoder's reusable buffers, so a whole file's

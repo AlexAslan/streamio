@@ -2,10 +2,11 @@ package jsonio_test
 
 import (
 	"math"
-	"streamio/internal/jsonio"
-	"streamio/internal/record"
 	"strings"
 	"testing"
+
+	"github.com/AlexAslan/streamio/internal/jsonio"
+	"github.com/AlexAslan/streamio/internal/record"
 )
 
 type objectDecodedField struct {

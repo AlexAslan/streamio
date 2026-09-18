@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"streamio"
 	"strings"
 	"sync"
 	"testing"
@@ -16,6 +15,8 @@ import (
 	"github.com/apache/arrow-go/v18/arrow/ipc"
 	"github.com/apache/arrow-go/v18/arrow/memory"
 	parquetgo "github.com/parquet-go/parquet-go"
+
+	"github.com/AlexAslan/streamio"
 )
 
 // testParquetRow is a minimal flat struct used to create test parquet fixtures.

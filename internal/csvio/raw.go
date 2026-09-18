@@ -4,9 +4,10 @@ import (
 	"context"
 	"errors"
 	"io"
-	"streamio/internal/formatio"
-	"streamio/internal/options"
-	"streamio/internal/pool"
+
+	"github.com/AlexAslan/streamio/internal/formatio"
+	"github.com/AlexAslan/streamio/internal/options"
+	"github.com/AlexAslan/streamio/internal/pool"
 )
 
 // rawSource streams a CSV/TSV source's own data rows to the sink, one document per row. It

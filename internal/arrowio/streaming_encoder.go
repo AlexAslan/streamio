@@ -3,13 +3,14 @@ package arrowio
 import (
 	"errors"
 	"fmt"
-	"streamio/internal/formatio"
-	"streamio/internal/options"
-	"streamio/internal/record"
 
 	"github.com/apache/arrow-go/v18/arrow/array"
 	"github.com/apache/arrow-go/v18/arrow/ipc"
 	"github.com/apache/arrow-go/v18/arrow/memory"
+
+	"github.com/AlexAslan/streamio/internal/formatio"
+	"github.com/AlexAslan/streamio/internal/options"
+	"github.com/AlexAslan/streamio/internal/record"
 )
 
 // errEncodeAfterFinalize is returned by EncodeBatch once Finalize has already run — the same guard

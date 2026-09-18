@@ -5,11 +5,12 @@ import (
 	"errors"
 	"io"
 	"path/filepath"
-	"streamio/internal/formatio"
-	"streamio/internal/parquetio"
-	"streamio/internal/record"
 	"sync"
 	"testing"
+
+	"github.com/AlexAslan/streamio/internal/formatio"
+	"github.com/AlexAslan/streamio/internal/parquetio"
+	"github.com/AlexAslan/streamio/internal/record"
 )
 
 // richRow covers every classification branch scalarValue has: each physical parquet kind, and each

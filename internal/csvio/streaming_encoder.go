@@ -2,9 +2,10 @@ package csvio
 
 import (
 	"errors"
-	"streamio/internal/formatio"
-	"streamio/internal/options"
-	"streamio/internal/record"
+
+	"github.com/AlexAslan/streamio/internal/formatio"
+	"github.com/AlexAslan/streamio/internal/options"
+	"github.com/AlexAslan/streamio/internal/record"
 )
 
 // errEncodeAfterFinalize is returned by EncodeBatch once Finalize has already run, mirroring

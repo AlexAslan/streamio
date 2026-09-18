@@ -2,14 +2,15 @@ package parquetio_test
 
 import (
 	"bytes"
-	"streamio/internal/formatio"
-	"streamio/internal/options"
-	"streamio/internal/parquetio"
-	"streamio/internal/record"
 	"strings"
 	"testing"
 
 	parquetgo "github.com/parquet-go/parquet-go"
+
+	"github.com/AlexAslan/streamio/internal/formatio"
+	"github.com/AlexAslan/streamio/internal/options"
+	"github.com/AlexAslan/streamio/internal/parquetio"
+	"github.com/AlexAslan/streamio/internal/record"
 )
 
 // newBatchEncoder builds an encoder with the default options, failing the test rather than returning

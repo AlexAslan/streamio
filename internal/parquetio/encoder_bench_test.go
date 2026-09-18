@@ -2,11 +2,12 @@ package parquetio_test
 
 import (
 	"fmt"
-	"streamio/internal/formatio"
-	"streamio/internal/options"
-	"streamio/internal/parquetio"
-	"streamio/internal/record"
 	"testing"
+
+	"github.com/AlexAslan/streamio/internal/formatio"
+	"github.com/AlexAslan/streamio/internal/options"
+	"github.com/AlexAslan/streamio/internal/parquetio"
+	"github.com/AlexAslan/streamio/internal/record"
 )
 
 // genEncoderBenchRows builds n representative records — a mix of int/float/bool/string columns,

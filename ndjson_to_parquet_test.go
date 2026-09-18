@@ -6,11 +6,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"streamio"
 	"strings"
 	"testing"
 
 	parquetgo "github.com/parquet-go/parquet-go"
+
+	"github.com/AlexAslan/streamio"
 )
 
 // ndjsonRow is one source line's values, kept as a named type so the expectation and the read-back

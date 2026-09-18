@@ -8,14 +8,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"streamio/internal/arrowio"
-	"streamio/internal/csvio"
-	"streamio/internal/formatio"
-	"streamio/internal/jsonio"
-	"streamio/internal/options"
-	"streamio/internal/parquetio"
-	"streamio/internal/pool"
 	"strings"
+
+	"github.com/AlexAslan/streamio/internal/arrowio"
+	"github.com/AlexAslan/streamio/internal/csvio"
+	"github.com/AlexAslan/streamio/internal/formatio"
+	"github.com/AlexAslan/streamio/internal/jsonio"
+	"github.com/AlexAslan/streamio/internal/options"
+	"github.com/AlexAslan/streamio/internal/parquetio"
+	"github.com/AlexAslan/streamio/internal/pool"
 )
 
 // ErrNoConversionPath is returned when the requested output format can't be produced from the

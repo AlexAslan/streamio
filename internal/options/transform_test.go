@@ -1,10 +1,11 @@
 package options_test
 
 import (
-	"streamio/internal/options"
-	"streamio/internal/record"
 	"strings"
 	"testing"
+
+	"github.com/AlexAslan/streamio/internal/options"
+	"github.com/AlexAslan/streamio/internal/record"
 )
 
 func TestPathTransformer_RenameAndDropNestedPaths(t *testing.T) {

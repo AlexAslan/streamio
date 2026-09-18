@@ -5,10 +5,11 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"streamio"
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/AlexAslan/streamio"
 )
 
 // conformanceFormat is one entry in the table every registered format is checked against: how to

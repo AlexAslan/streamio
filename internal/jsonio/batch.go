@@ -2,8 +2,9 @@ package jsonio
 
 import (
 	"context"
-	"streamio/internal/pool"
 	"time"
+
+	"github.com/AlexAslan/streamio/internal/pool"
 )
 
 // recordBatcher is one decode worker's private line-accumulation scratch, reused across every

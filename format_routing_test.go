@@ -7,12 +7,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"streamio"
 	"strings"
 	"sync/atomic"
 	"testing"
 
 	parquetgo "github.com/parquet-go/parquet-go"
+
+	"github.com/AlexAslan/streamio"
 )
 
 // routingRow is the fixture struct for the format-routing tests.
