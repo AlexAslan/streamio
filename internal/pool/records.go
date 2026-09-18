@@ -80,6 +80,7 @@ type recordWorker struct {
 	dec         formatio.RecordDecoder
 	enc         formatio.RecordEncoder
 	transformer options.Transformer
+	onRowError  options.RowErrorPolicy
 
 	// batch is the caller-owned batch the decoder refills, per formatio.RecordDecoder's contract.
 	// Its length is also the most rows a single encoded document can cover, for an encoder that
@@ -98,6 +99,7 @@ func newRecordWorker(
 		dec:         dec,
 		enc:         enc,
 		transformer: transformer,
+		onRowError:  cfg.OnRowError,
 		batch:       make([]record.Record, cfg.Run.BatchSize),
 	}
 }
@@ -113,7 +115,7 @@ func (w *recordWorker) decode(ctx context.Context, out chan<- [][]byte, stats *D
 		// Decode and encode are timed as one span: ReadDuration means the time spent turning input
 		// into documents, which on this path is both halves.
 		readStart := time.Now()
-		n, decErr := w.dec.DecodeNext(ctx, w.batch)
+		n, decErr := w.decodeBatch(ctx, stats)
 		transformErr := w.transformBatch(n)
 		var docs [][]byte
 		var encErr error
@@ -149,6 +151,44 @@ func (w *recordWorker) decode(ctx context.Context, out chan<- [][]byte, stats *D
 			return decErr
 		}
 	}
+}
+
+// decodeBatch fills w.batch, retrying past a row-content error when w.onRowError.Mode is
+// RowErrorSkip and the decoder wrapped it as a *formatio.RowError — the decoder's own contract for
+// wrapping one guarantees it still leaves the decoder positioned to resume at the next row, so
+// calling DecodeNext again picks up right after the dropped one. Any other error (io.EOF, a
+// cancelled context, or a plain unwrapped error from a decoder that never distinguishes row
+// content from I/O failures, e.g. Parquet) returns immediately, exactly as before this option
+// existed.
+func (w *recordWorker) decodeBatch(ctx context.Context, stats *DecodeStats) (int, error) {
+	filled := 0
+	for filled < len(w.batch) {
+		n, err := w.dec.DecodeNext(ctx, w.batch[filled:])
+		filled += n
+
+		if err == nil {
+			return filled, nil
+		}
+		if !w.skippable(err) {
+			return filled, err
+		}
+
+		stats.RowsSkipped.Add(1)
+		if w.onRowError.OnSkip != nil {
+			w.onRowError.OnSkip(err)
+		}
+	}
+	return filled, nil
+}
+
+// skippable reports whether err is a row error this worker should skip past rather than fail the
+// run on: skipping is enabled and err wraps a *formatio.RowError.
+func (w *recordWorker) skippable(err error) bool {
+	if w.onRowError.Mode != options.RowErrorSkip {
+		return false
+	}
+	var rowErr *formatio.RowError
+	return errors.As(err, &rowErr)
 }
 
 // finalize dispatches the trailing bytes from the worker's encoder, if it implements

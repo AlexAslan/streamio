@@ -37,6 +37,17 @@ type (
 // TransformRule is a single rename or drop rule built by RenamePath or DropPath.
 type TransformRule = options.PathTransformRule
 
+// RowErrorMode selects how ProcessFile responds to a single row failing to decode.
+type RowErrorMode = options.RowErrorMode
+
+const (
+	// RowErrorFailFast stops the whole run on the first row decode error. This is the default.
+	RowErrorFailFast = options.RowErrorFailFast
+	// RowErrorSkip skips the offending row and continues, for NDJSON and CSV/TSV field errors; it
+	// has no effect on Parquet or a CSV/TSV syntax error, which stay fail-fast regardless.
+	RowErrorSkip = options.RowErrorSkip
+)
+
 // WithInputFormat sets the source file's format explicitly, instead of letting ProcessFile infer
 // it from the file extension.
 func WithInputFormat(f Format) Option {
@@ -115,4 +126,11 @@ func DropPath(path string) TransformRule {
 // encoded into the requested output format.
 func WithTransforms(rules ...TransformRule) Option {
 	return options.WithTransforms(rules...)
+}
+
+// WithOnRowError sets how ProcessFile responds to a single row failing to decode: mode picks
+// fail-fast (the default) or skip-and-continue, and onSkip, if non-nil, is called once per row
+// RowErrorSkip drops. onSkip is ignored when mode is RowErrorFailFast.
+func WithOnRowError(mode RowErrorMode, onSkip func(err error)) Option {
+	return options.WithOnRowError(mode, onSkip)
 }

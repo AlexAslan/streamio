@@ -47,6 +47,21 @@ type SplittableRecordDecoder interface {
 	Split(limit int) []RecordDecoder
 }
 
+// RowError wraps a DecodeNext error that is specifically a malformed row — not an I/O failure, not
+// context cancellation — leaving the decoder positioned to resume at the next row on the following
+// DecodeNext call. Only a decoder that can make this distinction should ever wrap an error in it;
+// wrapping an I/O or structural error would tell the pool it's safe to retry past when it isn't.
+// NDJSON and CSV/TSV wrap their per-row decode errors this way; Parquet does not, since parquet-go
+// reads and validates a whole row group at once, so its errors have no smaller recoverable unit —
+// WithOnRowError(RowErrorSkip) has no effect there, since no error it returns is ever a RowError.
+type RowError struct {
+	Err error
+}
+
+func (e *RowError) Error() string { return e.Err.Error() }
+
+func (e *RowError) Unwrap() error { return e.Err }
+
 // RecordEncoder renders a decoded batch as however many self-contained documents the format
 // produces from it — one per record for most formats, one per whole batch for a column-oriented
 // one like Parquet. One encoder drives one decode worker and need not be safe for concurrent use.
@@ -77,4 +92,8 @@ type DecodeStats struct {
 	// whole row group, or a whole encoded batch). Left at zero otherwise, letting the pool derive
 	// it from dispatch count.
 	Records atomic.Int64
+
+	// RowsSkipped counts rows WithOnRowError(RowErrorSkip, ...) dropped. Always zero under the
+	// default RowErrorFailFast.
+	RowsSkipped atomic.Int64
 }

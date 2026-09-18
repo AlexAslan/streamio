@@ -400,6 +400,61 @@ func TestRunConvert_InvalidCSVDelimiterRejected(t *testing.T) {
 	}
 }
 
+// TestRunConvert_OnRowErrorFailFast checks the default --on-row-error fail stops the whole
+// conversion on a malformed line, rather than writing partial or corrupted output.
+func TestRunConvert_OnRowErrorFailFast(t *testing.T) {
+	in := filepath.Join(t.TempDir(), "in.ndjson")
+	if err := os.WriteFile(in, []byte("{\"a\":1}\n{\"a\":}\n{\"a\":3}\n"), 0o600); err != nil {
+		t.Fatalf("write ndjson file: %v", err)
+	}
+	out := filepath.Join(t.TempDir(), "out.csv")
+
+	flags := convertFlags{in: in, out: out}
+	if err := runConvert(context.Background(), flags, "csv"); err == nil {
+		t.Fatal("runConvert on a malformed line returned no error")
+	}
+}
+
+// TestRunConvert_OnRowErrorSkip checks --on-row-error skip drops the malformed line and writes
+// every good row to the output.
+func TestRunConvert_OnRowErrorSkip(t *testing.T) {
+	in := filepath.Join(t.TempDir(), "in.ndjson")
+	if err := os.WriteFile(in, []byte("{\"a\":1}\n{\"a\":}\n{\"a\":3}\n"), 0o600); err != nil {
+		t.Fatalf("write ndjson file: %v", err)
+	}
+	out := filepath.Join(t.TempDir(), "out.csv")
+
+	flags := convertFlags{in: in, out: out, onRowError: "skip"}
+	if err := runConvert(context.Background(), flags, "csv"); err != nil {
+		t.Fatalf("runConvert: %v", err)
+	}
+
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("reading %s: %v", out, err)
+	}
+	got := string(data)
+	if !strings.Contains(got, "1") || !strings.Contains(got, "3") {
+		t.Errorf("output = %q, want it to contain both good rows' values", got)
+	}
+}
+
+// TestRunConvert_InvalidOnRowErrorRejected checks an unrecognized --on-row-error value fails with
+// an actionable error rather than silently falling back to fail-fast.
+func TestRunConvert_InvalidOnRowErrorRejected(t *testing.T) {
+	in := writeNDJSONFixture(t, 5)
+	out := filepath.Join(t.TempDir(), "out.csv")
+
+	flags := convertFlags{in: in, out: out, onRowError: "bogus"}
+	err := runConvert(context.Background(), flags, "csv")
+	if err == nil {
+		t.Fatal("runConvert succeeded, want an error for an unrecognized --on-row-error value")
+	}
+	if !strings.Contains(err.Error(), "--on-row-error") {
+		t.Errorf("runConvert error = %v, want one mentioning --on-row-error", err)
+	}
+}
+
 // TestFileWriter_ConcurrentWritesDoNotInterleave drives fileWriter.write from many goroutines at
 // once and checks every document appears in the output whole and exactly once: the mutex the type
 // is documented as needing "since decode workers may call the handler concurrently" is otherwise

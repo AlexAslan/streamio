@@ -87,6 +87,9 @@ type DocumentHandler func(ctx context.Context, doc []byte) error
 type Stats struct {
 	// RowsRead is how many input rows were decoded, regardless of how many documents they became.
 	RowsRead int64
+	// RowsSkipped is how many rows WithOnRowError(RowErrorSkip, ...) dropped. Always zero under the
+	// default RowErrorFailFast.
+	RowsSkipped int64
 	// DocumentsDispatched is how many documents were handed to the caller's handler. It can differ
 	// from RowsRead when an encoder renders a whole batch as one document (Parquet) rather than one
 	// document per row (NDJSON).

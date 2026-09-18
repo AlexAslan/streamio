@@ -196,6 +196,41 @@ func TestNewDecoder_FieldCountMismatch(t *testing.T) {
 	}
 }
 
+// TestNewDecoder_RowErrorWrapsFieldCountMismatch checks a field-count mismatch's DecodeNext error
+// unwraps to a *formatio.RowError — the reader already read a complete row before decodeRow
+// rejected it, so its position is unaffected and the pool can safely skip past under
+// RowErrorSkip — and that the decoder genuinely does resume: a second DecodeNext call after the
+// error returns the next row, not the same failing one again or EOF.
+func TestNewDecoder_RowErrorWrapsFieldCountMismatch(t *testing.T) {
+	path := writeCSVFile(t, "a,b,c\n1,2\n4,5,6\n")
+	dec := openRecordDecoder(t, path, newConfig(1, 0, ',', true))
+
+	batch := make([]record.Record, 1)
+	n, err := dec.DecodeNext(context.Background(), batch)
+	if n != 0 {
+		t.Fatalf("DecodeNext on the short row filled %d records, want 0", n)
+	}
+	var rowErr *formatio.RowError
+	if !errors.As(err, &rowErr) {
+		t.Fatalf("DecodeNext error = %v, want it to unwrap to *formatio.RowError", err)
+	}
+
+	n, err = dec.DecodeNext(context.Background(), batch)
+	if err != nil {
+		t.Fatalf("DecodeNext after the short row: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("DecodeNext after the short row filled %d records, want 1", n)
+	}
+	got := make(map[string]string, len(batch[0]))
+	for _, f := range batch[0] {
+		got[f.Name] = string(f.Value.Str)
+	}
+	if got["a"] != "4" || got["b"] != "5" || got["c"] != "6" {
+		t.Errorf("resumed at %v, want a=4,b=5,c=6", got)
+	}
+}
+
 // TestNewDecoder_QuotedFieldWithDelimiter checks a quoted field containing the delimiter decodes
 // as one field, per RFC 4180 quoting rules that encoding/csv already implements.
 func TestNewDecoder_QuotedFieldWithDelimiter(t *testing.T) {

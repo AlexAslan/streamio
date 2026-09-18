@@ -18,12 +18,16 @@ var errUnknownFormat = errors.New("unknown format: want json, parquet, csv, or t
 // errInvalidCSVDelimiter is returned when --csv-delimiter isn't exactly one character.
 var errInvalidCSVDelimiter = errors.New("--csv-delimiter must be exactly one character")
 
+// errUnknownOnRowError is returned when --on-row-error names an unsupported mode.
+var errUnknownOnRowError = errors.New("--on-row-error: want skip or fail")
+
 // convertFlags holds the convert subcommand's flag values. outFormat is passed alongside these
 // rather than folded in, since runConvert needs it before the rest are turned into options.
 type convertFlags struct {
 	in, out        string
 	inFormat       string
 	csvDelimiter   string
+	onRowError     string
 	readBufferSize int
 	batchSize      int
 	workers        int
@@ -53,7 +57,12 @@ Parquet caps a file at that many row groups (one per batch), and a batch size to
 input's total size fails the whole conversion outright rather than merely costing a larger footer.
 
 --csv-delimiter and --csv-has-header only apply when --in-format or --out-format is csv or tsv.
---csv-delimiter defaults to ',' for csv and '\t' for tsv; --csv-has-header defaults to false.`,
+--csv-delimiter defaults to ',' for csv and '\t' for tsv; --csv-has-header defaults to false.
+
+--on-row-error controls what happens when a single row fails to decode: "fail" (the default) stops
+the whole run; "skip" drops the row and continues, for NDJSON and CSV/TSV field errors — it has no
+effect on Parquet or a CSV/TSV syntax error (e.g. an unterminated quoted field), which still fail
+the run regardless.`,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runConvert(cmd.Context(), flags, outFormat)
@@ -74,6 +83,8 @@ input's total size fails the whole conversion outright rather than merely costin
 		"CSV/TSV field delimiter, one character (default: ',' for csv, tab for tsv)")
 	cmd.Flags().BoolVar(&flags.csvHasHeader, "csv-has-header", false,
 		"CSV/TSV first row names the columns rather than holding data")
+	cmd.Flags().StringVar(&flags.onRowError, "on-row-error", "fail",
+		"response to a single row failing to decode: fail|skip")
 
 	for _, name := range []string{"in", "out"} {
 		if err := cmd.MarkFlagRequired(name); err != nil {
@@ -114,6 +125,18 @@ func parseCSVDelimiter(s string) (rune, error) {
 		return 0, fmt.Errorf("%w: got %q", errInvalidCSVDelimiter, s)
 	}
 	return runes[0], nil
+}
+
+// parseOnRowError maps a --on-row-error flag value onto a streamio.RowErrorMode.
+func parseOnRowError(s string) (streamio.RowErrorMode, error) {
+	switch strings.ToLower(s) {
+	case "", "fail":
+		return streamio.RowErrorFailFast, nil
+	case "skip":
+		return streamio.RowErrorSkip, nil
+	default:
+		return 0, fmt.Errorf("%w: %q", errUnknownOnRowError, s)
+	}
 }
 
 // csvOptions builds the CSV/TSV-specific options for a run involving inFormat or outFormat,
@@ -189,6 +212,16 @@ func buildConvertOptions(flags convertFlags, outFormat streamio.Format) ([]strea
 		opts = append(opts, streamio.WithParallelWorkers(flags.workers))
 	}
 
+	onRowError, err := parseOnRowError(flags.onRowError)
+	if err != nil {
+		return nil, err
+	}
+	if onRowError == streamio.RowErrorSkip {
+		opts = append(opts, streamio.WithOnRowError(onRowError, func(err error) {
+			fmt.Fprintf(os.Stderr, "skipping row: %v\n", err)
+		}))
+	}
+
 	return opts, nil
 }
 
@@ -236,6 +269,12 @@ func runConvert(ctx context.Context, flags convertFlags, outFormatFlag string) (
 				flags.in, flags.out, err)
 		}
 		return fmt.Errorf("converting %s to %s: %w", flags.in, flags.out, err)
+	}
+
+	if result.Stats.RowsSkipped > 0 {
+		fmt.Fprintf(os.Stdout, "wrote %s: %d rows read, %d rows skipped, %d documents dispatched\n",
+			flags.out, result.Stats.RowsRead, result.Stats.RowsSkipped, result.Stats.DocumentsDispatched)
+		return nil
 	}
 
 	fmt.Fprintf(os.Stdout, "wrote %s: %d rows read, %d documents dispatched\n",

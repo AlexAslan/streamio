@@ -169,6 +169,80 @@ func TestProcessFile_MissingFile(t *testing.T) {
 	}
 }
 
+// TestProcessFile_OnRowErrorFailFast checks the default RowErrorFailFast mode stops the whole run
+// on the first malformed line, exactly as streamio behaved before WithOnRowError existed.
+//
+// Output is forced to CSV, not JSON: NDJSON-to-JSON is a native-format match, which ProcessFile
+// takes as raw passthrough (see ProcessReaderAt's doc) — no record decoder, and so no row-error
+// handling, is ever in play on that path. WithOnRowError only affects the generic decode/encode
+// route, which a genuine format conversion (here, to CSV) actually exercises.
+func TestProcessFile_OnRowErrorFailFast(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data.ndjson")
+	if err := os.WriteFile(path, []byte("{\"a\":1}\n{\"a\":}\n{\"a\":3}\n"), 0o600); err != nil {
+		t.Fatalf("write ndjson file: %v", err)
+	}
+	sink, collected := collectingSink()
+
+	_, err := streamio.ProcessFile(context.Background(), path, sink, streamio.WithOutputFormat(streamio.FormatCSV))
+	if err == nil {
+		t.Fatal("ProcessFile on a malformed line returned no error")
+	}
+	// The one row read successfully before the malformed one is still dispatched as its own
+	// document: DecodeNext's contract returns whatever it filled (n) alongside the error, and the
+	// pool encodes+dispatches that partial batch before propagating the error — pre-existing
+	// behavior this option doesn't change, only what RowErrorSkip does differently from it.
+	if len(collected()) != 1 {
+		t.Errorf("dispatched %d documents before failing, want 1 (the row read before the bad one)",
+			len(collected()))
+	}
+}
+
+// TestProcessFile_OnRowErrorSkip checks RowErrorSkip drops a malformed line and continues,
+// dispatching every good line, counting the drop in Stats.RowsSkipped, and calling onSkip once.
+// See TestProcessFile_OnRowErrorFailFast's doc for why output is forced to CSV.
+func TestProcessFile_OnRowErrorSkip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data.ndjson")
+	if err := os.WriteFile(path, []byte("{\"a\":1}\n{\"a\":}\n{\"a\":3}\n"), 0o600); err != nil {
+		t.Fatalf("write ndjson file: %v", err)
+	}
+	sink, collected := collectingSink()
+
+	var (
+		mu       sync.Mutex
+		skipped  []error
+		skipDone bool
+	)
+	onSkip := func(err error) {
+		mu.Lock()
+		defer mu.Unlock()
+		skipped = append(skipped, err)
+		skipDone = true
+	}
+
+	result, err := streamio.ProcessFile(context.Background(), path, sink,
+		streamio.WithOutputFormat(streamio.FormatCSV),
+		streamio.WithOnRowError(streamio.RowErrorSkip, onSkip))
+	if err != nil {
+		t.Fatalf("ProcessFile: %v", err)
+	}
+
+	docs := collected()
+	if len(docs) != 1 {
+		t.Fatalf("dispatched %d documents, want 1 (one CSV document holding both good rows)", len(docs))
+	}
+	if got := string(docs[0]); !strings.Contains(got, "1") || !strings.Contains(got, "3") {
+		t.Errorf("dispatched document = %q, want it to contain both good rows' values", got)
+	}
+	if result.Stats.RowsSkipped != 1 {
+		t.Errorf("Stats.RowsSkipped = %d, want 1", result.Stats.RowsSkipped)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !skipDone || len(skipped) != 1 {
+		t.Errorf("onSkip called %d times, want exactly 1", len(skipped))
+	}
+}
+
 func TestProcessFile_InvalidTransformReturnsError(t *testing.T) {
 	_, err := streamio.ProcessFile(
 		context.Background(),

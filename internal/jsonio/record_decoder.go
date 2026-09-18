@@ -98,7 +98,10 @@ func (d *recordDecoder) DecodeNext(ctx context.Context, batch []record.Record) (
 
 		rec, err := d.decodeLine(batch[n], line)
 		if err != nil {
-			return n, err
+			// A malformed line never invalidates d.lines' position in the rest of the chunk — the
+			// next DecodeNext call picks up at the following line — so this is exactly the error
+			// formatio.RowError exists to let the pool skip past under RowErrorSkip.
+			return n, &formatio.RowError{Err: err}
 		}
 		batch[n] = rec
 		n++

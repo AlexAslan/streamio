@@ -221,6 +221,37 @@ func TestNewDecoder_RejectsUnsupportedLines(t *testing.T) {
 	}
 }
 
+// TestNewDecoder_RowErrorWrapsMalformedLine checks a malformed line's DecodeNext error unwraps to
+// a *formatio.RowError, the marker pool.recordWorker uses to decide a row error is safe to skip
+// and resume past under RowErrorSkip — and that the decoder genuinely does resume: a second
+// DecodeNext call after the error returns the next line, not the same failing one again or EOF.
+func TestNewDecoder_RowErrorWrapsMalformedLine(t *testing.T) {
+	path := writeNdjsonFile(t, []string{`{"a":}`, `{"b":2}`})
+	dec := openRecordDecoder(t, path, newConfig(1, 0, 0))
+
+	batch := make([]record.Record, 1)
+	n, err := dec.DecodeNext(context.Background(), batch)
+	if n != 0 {
+		t.Fatalf("DecodeNext on the malformed line filled %d records, want 0", n)
+	}
+	var rowErr *formatio.RowError
+	if !errors.As(err, &rowErr) {
+		t.Fatalf("DecodeNext error = %v, want it to unwrap to *formatio.RowError", err)
+	}
+
+	n, err = dec.DecodeNext(context.Background(), batch)
+	if err != nil {
+		t.Fatalf("DecodeNext after the malformed line: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("DecodeNext after the malformed line filled %d records, want 1", n)
+	}
+	got := flatten(batch[0])
+	if len(got) != 1 || got[0].name != "b" || got[0].i64 != 2 {
+		t.Errorf("resumed at %+v, want field b=2", got)
+	}
+}
+
 // TestNewDecoder_NestedErrorNamesTheField checks the nested-value error says which field it was,
 // which is the whole point of rejecting rather than skipping.
 func TestNewDecoder_NestedErrorNamesTheField(t *testing.T) {

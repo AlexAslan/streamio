@@ -105,7 +105,12 @@ func (d *recordDecoder) DecodeNext(ctx context.Context, batch []record.Record) (
 
 		rec, err := d.decodeRow(batch[n], fields)
 		if err != nil {
-			return n, err
+			// decodeRow's own field-count check runs after d.rows.next() already returned a
+			// complete row — the reader's position is unaffected by decodeRow rejecting it — so
+			// this, unlike a raw csv.Reader parse error (see next()'s doc for why that one is not
+			// safely skippable), is exactly the error formatio.RowError exists to let the pool skip
+			// past under RowErrorSkip.
+			return n, &formatio.RowError{Err: err}
 		}
 		batch[n] = rec
 		n++
@@ -208,6 +213,13 @@ func (s *sharedState) openChunkRows(chunkIdx, chunkStart int64) (*csvRowReader, 
 // next returns this chunk's next row, or io.EOF once the chunk's share of rows is exhausted. The
 // returned slice is only valid until the next call to next, since the underlying csv.Reader has
 // ReuseRecord set.
+//
+// A parse error from c.r.Read() (e.g. an unterminated quoted field) is deliberately not wrapped as
+// a formatio.RowError: encoding/csv's Reader can consume an unbounded number of further physical
+// lines while looking for a quoted field's closing quote before giving up, so "skip just this row"
+// has no well-defined meaning here — the reader's position after such an error is not guaranteed
+// to be the start of the next row. Only decodeRow's own field-count check, which runs after a
+// complete row has already been read successfully, is safe to treat as skippable.
 func (c *csvRowReader) next() ([]string, error) {
 	if c.r.InputOffset() >= c.stop {
 		return nil, io.EOF

@@ -310,14 +310,34 @@ work through `processRecords`'s generic loop with no CSV-specific code in either
 | `WithBatchSize(n)` | 512 | Documents per send to a dispatch worker. On the generic path it also sizes the `ReadRows` fetch, and for Parquet *output* it is the number of rows per synthesized Parquet file; ignored by Parquet raw passthrough, which always sends one row group per item. |
 | `WithMaxOpenReaders(n)` | `Workers` | Caps simultaneously-open Parquet row-group readers, for either read route (see above). Ignored by NDJSON. |
 | `WithLogger(l)` | none | Receives a one-line summary (`row/line count, size`) when `ProcessFile` starts. |
+| `WithOnRowError(mode, onSkip)` | `RowErrorFailFast` | `RowErrorSkip` drops a row that fails to decode and continues, instead of failing the whole run. Only takes effect for NDJSON and CSV/TSV field errors on the generic decode/encode path — a CSV/TSV *syntax* error (e.g. an unterminated quoted field) and every Parquet decode error stay fail-fast regardless, since neither leaves the decoder at a well-defined "start of the next row" to resume from. `onSkip`, if non-nil, is called once per dropped row with the error that row raised. |
 
 `n <= 0` for any numeric option means "use the default", identical to omitting it. Passing the zero `Format` (or omitting `WithOutputFormat` entirely) means `FormatJSON`.
 
 `ProcessFile` returns `streamio.Result{Stats: streamio.Stats{...}}`. `RowsRead` counts logical input
 rows; `DocumentsDispatched` counts successful handler calls. They differ on Parquet's raw path (one
-document is a row group) and whenever an encoder renders a whole batch as one document. `ReadDuration`
+document is a row group) and whenever an encoder renders a whole batch as one document. `RowsSkipped`
+counts rows `WithOnRowError(RowErrorSkip, ...)` dropped, always zero under the default. `ReadDuration`
 and `DispatchDuration` are summed across every worker, so they can exceed wall-clock time; that's
 expected for a concurrent run and is what makes decode-vs-dispatch time attributable at all.
+
+### Reading from something other than a file path
+
+`ProcessFile(ctx, path, handler, opts...)` is a thin wrapper: it opens `path`, stats it, and calls
+`streamio.ProcessReaderAt(ctx, streamio.Source{Reader, Name, Size}, handler, opts...)` — the actual
+primitive every format's chunked-parallel decoder is built on. `Source.Reader` only needs to satisfy
+`io.ReaderAt` over the declared `Size`, so anything with random-access reads (an in-memory buffer via
+`bytes.NewReader`, a range-read-capable remote object, a `*os.File` opened by the caller instead of by
+`ProcessFile`) can be decoded exactly like a real file, with identical throughput — every internal
+decoder already only ever used `*os.File` through this same `io.ReaderAt` interface, so generalizing
+the public entry point cost nothing measurable (verified by benchmark). `Source.Name` labels the
+input in diagnostics and error text and need not be a real path.
+
+There is no corresponding entry point for a non-seekable `io.Reader` (a pipe, stdin, a plain network
+stream): the chunked-parallel design fundamentally requires random access to claim and read byte
+ranges concurrently, and Parquet decode specifically requires reading the footer at the end of the
+stream before any row can be decoded at all — neither is possible without buffering the whole input
+first, which isn't something `ProcessReaderAt` does on a caller's behalf.
 
 ## Benchmarks
 
