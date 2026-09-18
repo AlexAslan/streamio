@@ -17,6 +17,8 @@ const (
 	FormatCSV = options.FormatCSV
 	// FormatTSV selects tab-separated values.
 	FormatTSV = options.FormatTSV
+	// FormatArrow selects Apache Arrow IPC (the file/random-access variant).
+	FormatArrow = options.FormatArrow
 )
 
 // DocumentHandler is invoked once per output document. It may be called concurrently by multiple

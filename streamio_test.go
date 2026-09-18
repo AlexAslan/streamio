@@ -11,12 +11,49 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/apache/arrow-go/v18/arrow"
+	"github.com/apache/arrow-go/v18/arrow/array"
+	"github.com/apache/arrow-go/v18/arrow/ipc"
+	"github.com/apache/arrow-go/v18/arrow/memory"
 	parquetgo "github.com/parquet-go/parquet-go"
 )
 
 // testParquetRow is a minimal flat struct used to create test parquet fixtures.
 type testParquetRow struct {
 	Value string `parquet:"value"`
+}
+
+// createArrowFile writes a single-row Arrow IPC file at path, one string column.
+func createArrowFile(t *testing.T, path string) {
+	t.Helper()
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("create arrow file: %v", err)
+	}
+
+	schema := arrow.NewSchema([]arrow.Field{
+		{Name: "value", Type: arrow.BinaryTypes.String, Nullable: true},
+	}, nil)
+	alloc := memory.NewGoAllocator()
+	w, err := ipc.NewFileWriter(f, ipc.WithSchema(schema), ipc.WithAllocator(alloc))
+	if err != nil {
+		t.Fatalf("NewFileWriter: %v", err)
+	}
+
+	rb := array.NewRecordBuilder(alloc, schema)
+	rb.Field(0).(*array.StringBuilder).Append("hello")
+	rec := rb.NewRecordBatch()
+	defer rec.Release()
+
+	if err = w.Write(rec); err != nil {
+		t.Fatalf("write arrow record: %v", err)
+	}
+	if err = w.Close(); err != nil {
+		t.Fatalf("close arrow writer: %v", err)
+	}
+	if err = f.Close(); err != nil {
+		t.Fatalf("close arrow file: %v", err)
+	}
 }
 
 // createParquetFile writes a single-row parquet file at path.
@@ -100,6 +137,24 @@ func TestProcess_DispatchesParquet(t *testing.T) {
 				t.Fatalf("got %d docs, want 1 non-empty document", len(docs))
 			}
 		})
+	}
+}
+
+// TestProcess_DispatchesArrow verifies that Process routes .arrow extensions to the Arrow reader,
+// through the generic record path — arrowio has no raw source, so this exercises decode+re-encode
+// rather than raw passthrough, unlike TestProcess_DispatchesParquet's equivalent.
+func TestProcess_DispatchesArrow(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "data.arrow")
+	createArrowFile(t, path)
+	sink, collected := collectingSink()
+
+	if _, err := streamio.ProcessFile(context.Background(), path, sink); err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+	docs := collected()
+	if len(docs) != 1 || len(docs[0]) == 0 {
+		t.Fatalf("got %d docs, want 1 non-empty document", len(docs))
 	}
 }
 

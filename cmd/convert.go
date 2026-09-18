@@ -13,7 +13,7 @@ import (
 )
 
 // errUnknownFormat is returned when --in-format or --out-format names an unsupported format.
-var errUnknownFormat = errors.New("unknown format: want json, parquet, csv, or tsv")
+var errUnknownFormat = errors.New("unknown format: want json, parquet, csv, tsv, or arrow")
 
 // errInvalidCSVDelimiter is returned when --csv-delimiter isn't exactly one character.
 var errInvalidCSVDelimiter = errors.New("--csv-delimiter must be exactly one character")
@@ -42,15 +42,17 @@ func getConvertCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "convert",
-		Short: "Convert a document file between NDJSON, Parquet, CSV, and TSV",
-		Long: `Convert reads --in, decodes it as NDJSON, Parquet, CSV, or TSV (auto-detected from its
-extension, or overridden with --in-format), and writes it back out as --out-format to --out.
+		Short: "Convert a document file between NDJSON, Parquet, CSV, TSV, and Arrow IPC",
+		Long: `Convert reads --in, decodes it as NDJSON, Parquet, CSV, TSV, or Arrow IPC (auto-detected
+from its extension, or overridden with --in-format), and writes it back out as --out-format to --out.
 
-Parquet output is always a single file: internally it streams every batch of rows into it as its
-own row group, keeping memory bounded to one batch regardless of the input's total size, so
-converting a multi-gigabyte input does not require holding it all in memory. Because a single
-Parquet writer can't be driven by more than one goroutine at once, --workers is forced to 1
-whenever --out-format is parquet, regardless of what it's set to.
+Parquet and Arrow output are always a single file: internally each streams every batch of rows into
+it as its own row group (Parquet) or record batch (Arrow), keeping memory bounded to one batch
+regardless of the input's total size, so converting a multi-gigabyte input does not require holding
+it all in memory. Because a single writer for either format can't be driven by more than one
+goroutine at once, --workers is forced to 1 whenever --out-format is parquet or arrow, regardless of
+what it's set to. Arrow has no raw-passthrough route even Arrow-to-Arrow, unlike Parquet: it always
+decodes to records and re-encodes.
 
 For very large inputs, choose --batch-size so total rows / batch-size stays well under 32,767:
 Parquet caps a file at that many row groups (one per batch), and a batch size too small for the
@@ -72,8 +74,8 @@ Parquet decode error always fail the run regardless of --max-row-errors.`,
 
 	cmd.Flags().StringVar(&flags.in, "in", "", "input file path (required)")
 	cmd.Flags().StringVar(&flags.out, "out", "", "output file path (required)")
-	cmd.Flags().StringVar(&outFormat, "out-format", "json", "output format: json|parquet|csv|tsv")
-	cmd.Flags().StringVar(&flags.inFormat, "in-format", "", "override input format detection: json|parquet|csv|tsv")
+	cmd.Flags().StringVar(&outFormat, "out-format", "json", "output format: json|parquet|csv|tsv|arrow")
+	cmd.Flags().StringVar(&flags.inFormat, "in-format", "", "override input format detection: json|parquet|csv|tsv|arrow")
 	cmd.Flags().IntVar(&flags.readBufferSize, "read-buffer-size", 0, "read buffer size in bytes (0 = default)")
 	cmd.Flags().IntVar(&flags.batchSize, "batch-size", 0, "documents batched per dispatch (0 = default)")
 	cmd.Flags().IntVar(&flags.workers, "workers", 0, "number of concurrent decode workers (0 = default)")
@@ -107,6 +109,8 @@ func parseFormat(s string) (streamio.Format, error) {
 		return streamio.FormatCSV, nil
 	case "tsv":
 		return streamio.FormatTSV, nil
+	case "arrow":
+		return streamio.FormatArrow, nil
 	default:
 		return "", fmt.Errorf("%w: %q", errUnknownFormat, s)
 	}
@@ -186,8 +190,9 @@ func buildConvertOptions(flags convertFlags, outFormat streamio.Format) ([]strea
 		opts = append(opts, streamio.WithMaxOpenReaders(flags.maxOpenReaders))
 	}
 
-	// A single Parquet writer can't be driven by more than one goroutine, so single-file streaming
-	// output forces one decode worker regardless of --workers; see WithSingleFileOutput's doc.
+	// A single Parquet or Arrow writer can't be driven by more than one goroutine, so single-file
+	// streaming output forces one decode worker regardless of --workers; see WithSingleFileOutput's
+	// doc.
 	//
 	// CSV/TSV output needs the same treatment: with more than one worker and no streaming encoder,
 	// dispatch delivers batches in completion order (not input order) and each worker's own encoder
@@ -195,7 +200,7 @@ func buildConvertOptions(flags convertFlags, outFormat streamio.Format) ([]strea
 	// file would gain reordered rows and a repeated header. Forcing single-file streaming output
 	// keeps one encoder deriving the header once and emitting rows in dispatch order for the whole
 	// run.
-	if outFormat == streamio.FormatParquet || isCSVFamily(outFormat) {
+	if outFormat == streamio.FormatParquet || outFormat == streamio.FormatArrow || isCSVFamily(outFormat) {
 		opts = append(opts, streamio.WithSingleFileOutput(true), streamio.WithParallelWorkers(1))
 	} else if flags.workers > 0 {
 		opts = append(opts, streamio.WithParallelWorkers(flags.workers))

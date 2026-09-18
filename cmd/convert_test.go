@@ -470,6 +470,50 @@ func TestRunConvert_NegativeMaxRowErrorsRejected(t *testing.T) {
 	}
 }
 
+// TestRunConvert_JSONToArrowRoundTrip checks NDJSON input converts to Arrow IPC and back to NDJSON
+// with every row intact, exercising the CLI's --out-format arrow / --in-format arrow wiring.
+func TestRunConvert_JSONToArrowRoundTrip(t *testing.T) {
+	const rows = 25
+	in := writeNDJSONFixture(t, rows)
+	arrowOut := filepath.Join(t.TempDir(), "out.arrow")
+
+	if err := runConvert(context.Background(), convertFlags{in: in, out: arrowOut}, "arrow"); err != nil {
+		t.Fatalf("runConvert (to arrow): %v", err)
+	}
+
+	jsonOut := filepath.Join(t.TempDir(), "roundtrip.json")
+	backFlags := convertFlags{in: arrowOut, out: jsonOut, inFormat: "arrow"}
+	if err := runConvert(context.Background(), backFlags, "json"); err != nil {
+		t.Fatalf("runConvert (back to json): %v", err)
+	}
+	if got := countNDJSONLines(t, jsonOut); got != rows {
+		t.Errorf("round trip produced %d rows, want %d", got, rows)
+	}
+}
+
+// TestRunConvert_ArrowIgnoresWorkersFlag checks --out-format arrow produces a single valid file
+// even when --workers requests more than one, mirroring the identical Parquet coverage — Arrow's
+// writer, like Parquet's, cannot be driven by more than one goroutine at once.
+func TestRunConvert_ArrowIgnoresWorkersFlag(t *testing.T) {
+	const rows = 500
+	in := writeNDJSONFixture(t, rows)
+	arrowOut := filepath.Join(t.TempDir(), "out.arrow")
+
+	flags := convertFlags{in: in, out: arrowOut, batchSize: 10, workers: 8}
+	if err := runConvert(context.Background(), flags, "arrow"); err != nil {
+		t.Fatalf("runConvert (to arrow): %v", err)
+	}
+
+	jsonOut := filepath.Join(t.TempDir(), "roundtrip.json")
+	backFlags := convertFlags{in: arrowOut, out: jsonOut, inFormat: "arrow"}
+	if err := runConvert(context.Background(), backFlags, "json"); err != nil {
+		t.Fatalf("runConvert (back to json): %v", err)
+	}
+	if got := countNDJSONLines(t, jsonOut); got != rows {
+		t.Errorf("round trip produced %d rows, want %d", got, rows)
+	}
+}
+
 // TestFileWriter_ConcurrentWritesDoNotInterleave drives fileWriter.write from many goroutines at
 // once and checks every document appears in the output whole and exactly once: the mutex the type
 // is documented as needing "since decode workers may call the handler concurrently" is otherwise

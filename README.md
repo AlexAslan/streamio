@@ -237,6 +237,75 @@ Three limits, all of which the encoder reports as errors rather than working aro
 Column order in the output is parquet-go's own name-sorted `parquetio.Group` order rather than the
 record's field order; the values and types are what round-trip, not the physical column ordering.
 
+## Arrow IPC: record batches, one read route
+
+Arrow IPC (`internal/arrowio`, backed by `github.com/apache/arrow-go/v18`) is columnar and
+batch-oriented like Parquet, but has only the generic decode/re-encode route — there is no raw
+passthrough:
+
+```
+record batches:  [ RB0 ][ RB1 ][ RB2 ][ RB3 ][ RB4 ][ RB5 ]
+                    │       │                          │
+                    ▼       ▼                          ▼
+                worker A  worker B   ...           worker A (loops back once RB0 is done)
+```
+
+- **Record decoding** (`arrowio.NewDecoder` → `recordDecoder`, `record_decoder.go`): each decode
+  worker claims the next unclaimed record batch via a shared `atomic.Int64` counter
+  (`sharedState.nextBatch`, built once per file by `openShared`) and reads it via
+  `ipc.FileReader.RecordBatchAt`, documented safe for concurrent use — the same claiming shape as
+  Parquet's row groups, with Arrow's own indexed accessor standing in for
+  `rowGroups []parquetgo.RowGroup`. It implements `formatio.SplittableRecordDecoder` and caps its
+  siblings at the record-batch count, for the same reason Parquet caps at row-group count: a record
+  batch is the smallest claimable unit, so extra decoders beyond that would only find the queue
+  empty.
+- **No raw passthrough.** Parquet's raw route works because `parquetgo.Writer.WriteRowGroup` can
+  splice an already-compressed row group's column chunks straight through. Arrow's `ipc.FileWriter`
+  has no equivalent — `Write` only accepts a live, already-decoded `arrow.RecordBatch` — so even an
+  Arrow-to-Arrow conversion always takes the generic decode/re-encode path, the same as CSV/TSV
+  (which never had an "already-encoded column chunk" to copy verbatim in the first place).
+  `formatSupportFor`'s `newRawSource` is `nil` for `FormatArrow`, a state `formatSupport`'s own doc
+  already calls out as legitimate.
+- **`ipc.NewFileReader` needs `Seek`, not just `ReadAt`.** It locates its own footer via
+  `Seek(0, io.SeekEnd)` rather than taking an explicit size parameter the way `parquetgo.OpenFile`
+  does. `options.Source{Reader io.ReaderAt, Size int64}` doesn't satisfy that on its own, but
+  `io.NewSectionReader(src.Reader, 0, src.Size)` does — `io.SectionReader` already implements
+  `Read`+`ReadAt`+`Seek` over any `io.ReaderAt` and known size, so no custom adapter was needed
+  (`arrow.go`'s `openShared`).
+- **Values are copied out, not held open.** Arrow's Go records are reference-counted
+  (`Release()`-requiring); rather than introduce a new held-open-across-batches resource lifetime
+  nothing else in this codebase has, `recordDecoder.DecodeNext` copies every value out of the batch
+  into a `record.Value` immediately and `Release()`s the Arrow record right away — matching every
+  other decoder's existing contract that `Value.Str`/`Map`/`List` are valid only until the next
+  decode call. This is honestly *not* a zero-copy path, unlike Parquet's `ByteArrayValue` aliasing
+  the page buffer directly; it trades away some of Arrow's own zero-copy advantage for lifetime
+  consistency with the rest of the codebase.
+- **`record.KindMap` and `record.KindList` are supported, both ways.** Unlike the Parquet and CSV/TSV
+  encoders (which reject both), Arrow's encoder (`encoder.go`) builds real nested columns —
+  `record.KindMap` becomes an `arrow.StructType` column (named, heterogeneous fields, matching
+  `record.Record`'s own shape exactly — not Arrow's `MapType`, which requires uniform key/value
+  types across all entries and is a poor fit), `record.KindList` becomes an `arrow.ListType` column,
+  via `array.NewStructBuilder`/`array.NewListBuilder`. Nesting can go arbitrarily deep (a `KindList`
+  of `KindMap` of `KindList`, and so on) — both the schema derivation and the decode-side walk are
+  recursive, not one-level-only.
+
+### Arrow as a generic-path *output* (`encoder.go`)
+
+Structurally the same three limits as the Parquet encoder: one schema derived from the first batch
+(scanning the whole batch, not just the first record, for each column's first non-null value), every
+column optional, and a schema mismatch in a later record is an error rather than a silent coercion.
+`NewEncoder` produces one standalone Arrow IPC file per batch by default, or delegates to
+`NewStreamingEncoder` under `WithSingleFileOutput(true)`.
+
+`ipc.FileWriter` has no `Reset`/`Flush` — unlike `parquetgo`'s writer, which the streaming Parquet
+encoder resets onto a fresh buffer per batch, Arrow's writer tracks a running byte offset
+internally that must stay continuous for the whole file's block-offset table, written into the
+footer only at `Close`. `streaming_encoder.go`'s `growingSink` (an `io.Writer` that appends to an
+internal buffer and exposes `Drain()` to copy-out-and-truncate) works around this: `ipc.FileWriter`
+writes to one continuous destination for the file's whole lifetime, while `EncodeBatch` still only
+returns the bytes written since the last call, keeping peak memory bounded to one batch's encoded
+size even though the writer itself is never reset.
+
 ## `record`/`formatio`: the generic cross-format seam
 
 Two small packages exist purely to let a future format join without touching `parquetio` or
@@ -267,9 +336,9 @@ Two small packages exist purely to let a future format join without touching `pa
     equivalent case on the JSON side: `jsonio.NewDecoder` decodes a nested JSON array into an
     ordered `[]Value` rather than rejecting it, recursively — an array element can itself be a
     nested object or array, to whatever depth the document has. Anything else a decoder can't
-    express in these Kinds is an error, not a guess. Only `jsonio` currently produces or consumes
-    `KindList`; every other encoder (`csvio`, `parquetio`) rejects it exactly like `KindMap`, since
-    neither CSV/TSV nor this Parquet encoder has anywhere to put an ordered nested sequence.
+    express in these Kinds is an error, not a guess. `jsonio` and `arrowio` both produce and consume
+    `KindMap`/`KindList`; `csvio` and `parquetio` reject both, since neither CSV/TSV nor the Parquet
+    encoder has anywhere to put an ordered nested sequence or a struct-shaped column.
 - **`formatio`** defines every capability a format supplies: `RawSource` (a file's own bytes →
   the handler), `RecordDecoder` (a file → a stream of `record.Record`), the optional
   `SplittableRecordDecoder` (one open file → several concurrent decoders), `RecordEncoder`
@@ -303,7 +372,9 @@ parameterized by delimiter) by supplying:
 3. One new registry case in `formatSupportFor`, filling in those fields.
 
 `parquetio` and `jsonio` needed no changes, and CSV→JSON, CSV→Parquet, JSON→CSV, and Parquet→CSV all
-work through `processRecords`'s generic loop with no CSV-specific code in either package.
+work through `processRecords`'s generic loop with no CSV-specific code in either package. Arrow IPC
+support (`internal/arrowio`) followed the identical seam later, needing no changes to `parquetio`,
+`jsonio`, or `csvio` either.
 
 ## Configuration (`streamio.Option`)
 

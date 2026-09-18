@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"streamio/internal/arrowio"
 	"streamio/internal/csvio"
 	"streamio/internal/formatio"
 	"streamio/internal/jsonio"
@@ -68,6 +69,15 @@ func formatSupportFor(f options.OutputFormat) (formatSupport, bool) {
 			newRecordDecoder: csvio.NewDecoder,
 			newRecordEncoder: csvio.NewEncoder,
 		}, true
+	case options.FormatArrow:
+		// arrowio has no raw source: ipc.FileWriter only accepts a live, already-decoded
+		// arrow.RecordBatch, with no verbatim-bytes splice analogous to parquet-go's
+		// Writer.WriteRowGroup, so even Arrow-to-Arrow goes through the generic decode/re-encode
+		// path. Its encoder renders one document per batch, like parquetio's and csvio's.
+		return formatSupport{
+			newRecordDecoder: arrowio.NewDecoder,
+			newRecordEncoder: arrowio.NewEncoder,
+		}, true
 	default:
 		return formatSupport{}, false
 	}
@@ -86,6 +96,8 @@ func DetectInputFormat(path string) Format {
 		return options.FormatCSV
 	case ".tsv":
 		return options.FormatTSV
+	case ".arrow":
+		return options.FormatArrow
 	default:
 		return options.FormatJSON
 	}
@@ -151,7 +163,7 @@ func ProcessReaderAt(
 	// Otherwise the generic path pairs the input's record decoder with the output's record
 	// encoder through canonical record.Records (e.g. Parquet in/JSON out, NDJSON in/Parquet out).
 	//
-	// WithSingleFileOutput is the one thing that rules raw passthrough out even when the formats
+	// WithSingleFileOutput is one thing that rules raw passthrough out even when the formats
 	// match: raw passthrough dispatches one independent, already-closed document per input chunk
 	// (one standalone file per Parquet row group) with no Finalize step to stitch them into one
 	// file, so concatenating several of them is not a valid file — only a FinalizableRecordEncoder
@@ -159,7 +171,13 @@ func ProcessReaderAt(
 	// therefore decodes to records and re-encodes through streamingEncoder instead of splicing
 	// row groups verbatim, trading that verbatim-copy optimization for a file that is actually
 	// valid.
-	if cfg.OutputFormat == in && !cfg.Run.SingleFileOutput {
+	//
+	// A format with no raw source at all (arrowio, which has no verbatim-bytes splice analogous to
+	// parquet-go's WriteRowGroup — see formatSupportFor's FormatArrow comment) always takes the
+	// generic path too, same-format conversion included, rather than reaching processRaw only to
+	// have it fail with ErrNoConversionPath despite the decoder/encoder pair actually existing.
+	support, hasRawSource := formatSupportFor(in)
+	if cfg.OutputFormat == in && !cfg.Run.SingleFileOutput && hasRawSource && support.newRawSource != nil {
 		return processRaw(ctx, src, sink, cfg, in)
 	}
 	return processRecords(ctx, src, sink, cfg, in)

@@ -18,6 +18,10 @@ const (
 
 	// FormatTSV delivers tab-separated rows.
 	FormatTSV OutputFormat = "tsv"
+
+	// FormatArrow delivers Apache Arrow IPC bytes (the file/random-access variant, not the
+	// streaming-only one).
+	FormatArrow OutputFormat = "arrow"
 )
 
 // String returns the format's name, or "unspecified" for the zero value. Config.New normalises the

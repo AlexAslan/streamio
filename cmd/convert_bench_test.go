@@ -61,6 +61,11 @@ func BenchmarkRunConvert(b *testing.B) {
 	if err := runConvert(context.Background(), csvFlags, "csv"); err != nil {
 		b.Fatalf("preparing csv fixture: %v", err)
 	}
+	arrowIn := filepath.Join(dir, "in.arrow")
+	arrowFlags := convertFlags{in: jsonIn, out: arrowIn}
+	if err := runConvert(context.Background(), arrowFlags, "arrow"); err != nil {
+		b.Fatalf("preparing arrow fixture: %v", err)
+	}
 
 	cases := []runConvertBenchCase{
 		{label: "json-to-json", in: jsonIn, outFormat: "json", outExt: ".json"},
@@ -70,6 +75,8 @@ func BenchmarkRunConvert(b *testing.B) {
 		{label: "json-to-csv", in: jsonIn, outFormat: "csv", outExt: ".csv", csvHasHeader: true},
 		{label: "csv-to-json", in: csvIn, inFormat: "csv", outFormat: "json", outExt: ".json", csvHasHeader: true},
 		{label: "json-to-tsv", in: jsonIn, outFormat: "tsv", outExt: ".tsv", csvHasHeader: true},
+		{label: "json-to-arrow", in: jsonIn, outFormat: "arrow", outExt: ".arrow"},
+		{label: "arrow-to-json", in: arrowIn, inFormat: "arrow", outFormat: "json", outExt: ".json"},
 	}
 
 	for _, tc := range cases {
@@ -104,6 +111,11 @@ func BenchmarkRunConvert_LargeScale(b *testing.B) {
 	if err := runConvert(context.Background(), csvFlags, "csv"); err != nil {
 		b.Fatalf("preparing csv fixture: %v", err)
 	}
+	arrowIn := filepath.Join(dir, "in.arrow")
+	arrowFixtureFlags := convertFlags{in: jsonIn, out: arrowIn, batchSize: parquetBatchSize}
+	if err := runConvert(context.Background(), arrowFixtureFlags, "arrow"); err != nil {
+		b.Fatalf("preparing arrow fixture: %v", err)
+	}
 
 	cases := []runConvertBenchCase{
 		{label: "json-to-json", in: jsonIn, outFormat: "json", outExt: ".json"},
@@ -119,6 +131,11 @@ func BenchmarkRunConvert_LargeScale(b *testing.B) {
 		{label: "json-to-csv", in: jsonIn, outFormat: "csv", outExt: ".csv", csvHasHeader: true},
 		{label: "csv-to-json", in: csvIn, inFormat: "csv", outFormat: "json", outExt: ".json", csvHasHeader: true},
 		{label: "json-to-tsv", in: jsonIn, outFormat: "tsv", outExt: ".tsv", csvHasHeader: true},
+		{
+			label: "json-to-arrow", in: jsonIn, outFormat: "arrow", outExt: ".arrow",
+			batchSize: parquetBatchSize,
+		},
+		{label: "arrow-to-json", in: arrowIn, inFormat: "arrow", outFormat: "json", outExt: ".json"},
 	}
 
 	for _, tc := range cases {
