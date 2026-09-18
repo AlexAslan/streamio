@@ -108,6 +108,8 @@ func (e *encoder) writeValue(v record.Value) error {
 		return e.enc.WriteToken(jsontext.String(string(v.Str)))
 	case record.KindMap:
 		return e.writeMap(v.Map)
+	case record.KindList:
+		return e.writeList(v.List)
 	default:
 		return fmt.Errorf("%w: %v", errUnsupportedKind, v.Kind)
 	}
@@ -149,6 +151,19 @@ func (e *encoder) writeMap(entries record.Record) error {
 		}
 	}
 	return e.enc.WriteToken(jsontext.EndObject)
+}
+
+// writeList writes a nested ordered sequence as a JSON array, in its original element order.
+func (e *encoder) writeList(elements []record.Value) error {
+	if err := e.enc.WriteToken(jsontext.BeginArray); err != nil {
+		return err
+	}
+	for i := range elements {
+		if err := e.writeValue(elements[i]); err != nil {
+			return err
+		}
+	}
+	return e.enc.WriteToken(jsontext.EndArray)
 }
 
 // trimTrailingNewline truncates the buffer back past any newline jsontext appended after the

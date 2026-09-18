@@ -440,3 +440,41 @@ func TestGenericPath_NDJSONRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+// TestGenericPath_NestedRoundTrip checks a nested object and array survive the generic
+// decode/encode path byte-for-byte: jsonio.recordDecoder decodes them into record.KindMap/
+// record.KindList rather than rejecting them, and jsonio.encoder renders them back out as the same
+// JSON structure, to more than one level of nesting.
+func TestGenericPath_NestedRoundTrip(t *testing.T) {
+	lines := []string{
+		`{"id":1,"attributes":{"a":"x","b":2}}`,
+		`{"id":2,"tags":["a","b","c"]}`,
+		`{"id":3,"nested":{"list":[1,2,{"k":"v"}],"empty_list":[],"empty_map":{}}}`,
+	}
+
+	path := filepath.Join(t.TempDir(), "nested.ndjson")
+	var buf []byte
+	for _, l := range lines {
+		buf = append(buf, l...)
+		buf = append(buf, '\n')
+	}
+	if err := os.WriteFile(path, buf, 0o600); err != nil {
+		t.Fatalf("write ndjson: %v", err)
+	}
+
+	sink, collected := orderedSink()
+	result := runGenericRecordPath(t, jsonio.NewDecoder, path, sink, streamio.WithParallelWorkers(1))
+
+	if result.Stats.RowsRead != int64(len(lines)) {
+		t.Errorf("Stats.RowsRead = %d, want %d", result.Stats.RowsRead, len(lines))
+	}
+	got := collected()
+	if len(got) != len(lines) {
+		t.Fatalf("round trip produced %d documents, want %d", len(got), len(lines))
+	}
+	for i := range lines {
+		if got[i] != lines[i] {
+			t.Errorf("line %d round-tripped to %s, want %s", i, got[i], lines[i])
+		}
+	}
+}

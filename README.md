@@ -224,12 +224,15 @@ Three limits, all of which the encoder reports as errors rather than working aro
   null further down the file and there is no cheap way to know up front which never will be, so
   marking them all optional is the pragmatic, documented simplification. A null in a later record is
   always accepted.
-- **`record.KindMap` is not supported** — a field carrying one returns an error naming it. This is
-  a deliberate scope limit matching `jsonio.NewDecoder`'s documented flat-objects-of-scalars scope:
-  `jsonio.NewDecoder` is the only file decoder that feeds this encoder today and never produces a
-  `KindMap`, so reconstructing a Parquet `Map(String,String)` column here would be speculative work
-  with no live caller to test it against. The one pair that *does* produce `KindMap` records,
-  Parquet→Parquet, is raw passthrough and never reaches an encoder at all.
+- **`record.KindMap` and `record.KindList` are not supported** — a field carrying either returns an
+  error naming it. `jsonio.NewDecoder` decodes a nested JSON object or array into exactly these
+  Kinds (see below), so this Parquet encoder is where that scope boundary actually lands: nothing
+  stops a `KindMap`/`KindList` record from reaching `NewEncoder` on a JSON→Parquet run, and it
+  rejects it outright rather than inventing a representation — reconstructing a Parquet
+  `Map(String,String)` column, or a Parquet `LIST` column, from an arbitrary decoded value would be
+  speculative work with no settled schema to target. The one pair that *does* produce `KindMap`
+  records from the Parquet side, Parquet→Parquet, is raw passthrough and never reaches an encoder
+  at all.
 
 Column order in the output is parquet-go's own name-sorted `parquetio.Group` order rather than the
 record's field order; the values and types are what round-trip, not the physical column ordering.
@@ -257,11 +260,16 @@ Two small packages exist purely to let a future format join without touching `pa
     a byte-wide tag costs nothing and lets the encoder render exactly what was stored. Likewise
     `SemanticFloat32` marks a `float64` widened from a 32-bit float, so it is formatted at the
     precision it actually carries rather than as `0.10000000149011612`.
-  - `KindMap` is the *only* nesting a `Record` admits, and exists for one reason: Parquet models a
-    `Map(String,String)` as one logical column (two leaf columns under a `key_value` group), and
-    every output format has to render it as one nested object. Flattening it to dotted top-level
-    fields would lose the grouping irrecoverably; a general nested-document representation would be
-    speculative. Anything else a decoder can't express in these Kinds is an error, not a guess.
+  - `KindMap` and `KindList` are the two nested Kinds a `Record` admits. `KindMap` exists because
+    Parquet models a `Map(String,String)` as one logical column (two leaf columns under a
+    `key_value` group), and every output format has to render it as one nested object — flattening
+    it to dotted top-level fields would lose the grouping irrecoverably. `KindList` exists for the
+    equivalent case on the JSON side: `jsonio.NewDecoder` decodes a nested JSON array into an
+    ordered `[]Value` rather than rejecting it, recursively — an array element can itself be a
+    nested object or array, to whatever depth the document has. Anything else a decoder can't
+    express in these Kinds is an error, not a guess. Only `jsonio` currently produces or consumes
+    `KindList`; every other encoder (`csvio`, `parquetio`) rejects it exactly like `KindMap`, since
+    neither CSV/TSV nor this Parquet encoder has anywhere to put an ordered nested sequence.
 - **`formatio`** defines every capability a format supplies: `RawSource` (a file's own bytes →
   the handler), `RecordDecoder` (a file → a stream of `record.Record`), the optional
   `SplittableRecordDecoder` (one open file → several concurrent decoders), `RecordEncoder`

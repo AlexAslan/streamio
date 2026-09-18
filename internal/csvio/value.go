@@ -28,7 +28,7 @@ func renderValue(dst []byte, v record.Value) ([]byte, error) {
 		return jsonio.AppendFloat(dst, v.F64, jsonio.Bits64), nil
 	case record.KindBytes:
 		return append(dst, v.Str...), nil
-	case record.KindMap:
+	case record.KindMap, record.KindList:
 		return dst, fmt.Errorf("%w", errMapUnsupported)
 	default:
 		return dst, fmt.Errorf("%w: %v", errUnsupportedKind, v.Kind)

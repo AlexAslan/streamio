@@ -132,7 +132,19 @@ func TestEncode_MapUnsupported(t *testing.T) {
 	if err == nil {
 		t.Fatal("EncodeBatch of a map field returned no error")
 	}
-	if !strings.Contains(err.Error(), "map fields are not supported") {
+	if !strings.Contains(err.Error(), "not supported") {
+		t.Errorf("error %q does not name the problem", err)
+	}
+}
+
+// TestEncode_ListUnsupported checks a record.KindList field is rejected the same way KindMap is.
+func TestEncode_ListUnsupported(t *testing.T) {
+	rec := record.Record{}.Append("l", record.List([]record.Value{record.Bytes([]byte("a"))}))
+	_, err := newEncoder(t, ',', true).EncodeBatch([]record.Record{rec})
+	if err == nil {
+		t.Fatal("EncodeBatch of a list field returned no error")
+	}
+	if !strings.Contains(err.Error(), "not supported") {
 		t.Errorf("error %q does not name the problem", err)
 	}
 }

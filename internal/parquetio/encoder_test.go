@@ -288,8 +288,8 @@ func assertSecondBatchAccepted(tb testing.TB, docs [][]byte, err error) {
 }
 
 // TestBatchEncoder_Rejects covers the inputs the encoder refuses outright, each of which would
-// otherwise produce a corrupt or silently wrong file. KindMap is the documented scope limit: it has
-// to fail loudly rather than panic or write a column it guessed at.
+// otherwise produce a corrupt or silently wrong file. KindMap and KindList are the documented scope
+// limit: either has to fail loudly rather than panic or write a column it guessed at.
 func TestBatchEncoder_Rejects(t *testing.T) {
 	type args struct {
 		name    string
@@ -304,7 +304,14 @@ func TestBatchEncoder_Rejects(t *testing.T) {
 				record.Record{}.
 					Append("attrs", record.Map(record.Record{}.Append("k", record.Bytes([]byte("v"))))),
 			},
-			wantErr: "map fields are not supported",
+			wantErr: "not supported",
+		},
+		{
+			name: "list field",
+			batch: []record.Record{
+				record.Record{}.Append("tags", record.List([]record.Value{record.Bytes([]byte("a"))})),
+			},
+			wantErr: "not supported",
 		},
 		{
 			name:    "record with no fields",

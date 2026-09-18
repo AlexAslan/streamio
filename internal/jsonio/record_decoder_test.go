@@ -187,9 +187,8 @@ func TestNewDecoder_PreservesFieldOrder(t *testing.T) {
 	}
 }
 
-// TestNewDecoder_RejectsUnsupportedLines pins the documented scope: flat objects of scalars, with
-// a specific error naming the offending field for anything else, rather than a silent
-// reinterpretation.
+// TestNewDecoder_RejectsUnsupportedLines pins the documented scope: an object, arbitrarily nested,
+// with a specific error for anything else, rather than a silent reinterpretation.
 func TestNewDecoder_RejectsUnsupportedLines(t *testing.T) {
 	type args struct {
 		name     string
@@ -198,8 +197,6 @@ func TestNewDecoder_RejectsUnsupportedLines(t *testing.T) {
 	}
 
 	tests := []args{
-		{name: "nested object", line: `{"a":{"b":1}}`, wantText: `nested value not supported`},
-		{name: "array", line: `{"a":[1,2]}`, wantText: `nested value not supported`},
 		{name: "top-level array", line: `[1,2]`, wantText: `not a JSON object`},
 		{name: "top-level scalar", line: `"just a string"`, wantText: `not a JSON object`},
 		{name: "malformed", line: `{"a":}`, wantText: `jsontext`},
@@ -252,18 +249,32 @@ func TestNewDecoder_RowErrorWrapsMalformedLine(t *testing.T) {
 	}
 }
 
-// TestNewDecoder_NestedErrorNamesTheField checks the nested-value error says which field it was,
-// which is the whole point of rejecting rather than skipping.
-func TestNewDecoder_NestedErrorNamesTheField(t *testing.T) {
-	path := writeNdjsonFile(t, []string{`{"id":1,"attributes":{"a":"b"}}`})
+// TestNewDecoder_DecodesNestedObjectAndArray checks a nested object and array decode into
+// record.KindMap/record.KindList on the full record-decoder path (chunked, batched), not just via
+// ObjectDecoder.Decode in isolation (see decoder_test.go's equivalent coverage there).
+func TestNewDecoder_DecodesNestedObjectAndArray(t *testing.T) {
+	path := writeNdjsonFile(t, []string{`{"id":1,"attributes":{"a":"b"},"tags":["x","y"]}`})
 	dec := openRecordDecoder(t, path, newConfig(1, 0, 0))
 
-	_, err := drainRecordDecoder(dec, 8)
-	if err == nil {
-		t.Fatal("decoding a nested object returned no error")
+	rows := mustDrainRecords(t, dec, 8)
+	if len(rows) != 1 {
+		t.Fatalf("decoded %d lines, want 1", len(rows))
 	}
-	if !strings.Contains(err.Error(), `"attributes"`) {
-		t.Errorf("error %q does not name the offending field", err)
+
+	var attrs, tags *decodedField
+	for i := range rows[0] {
+		switch rows[0][i].name {
+		case "attributes":
+			attrs = &rows[0][i]
+		case "tags":
+			tags = &rows[0][i]
+		}
+	}
+	if attrs == nil || attrs.kind != record.KindMap {
+		t.Errorf("attributes = %+v, want a present KindMap field", attrs)
+	}
+	if tags == nil || tags.kind != record.KindList {
+		t.Errorf("tags = %+v, want a present KindList field", tags)
 	}
 }
 

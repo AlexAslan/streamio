@@ -116,12 +116,12 @@ func TestDecode_RejectsUnsupportedDocuments(t *testing.T) {
 		doc  string
 		want string
 	}{
-		{name: "nested object", doc: `{"a":{"b":1}}`, want: "nested value not supported"},
-		{name: "array", doc: `{"a":[1,2]}`, want: "nested value not supported"},
 		{name: "top-level array", doc: `[1,2]`, want: "not a JSON object"},
 		{name: "top-level scalar", doc: `"just a string"`, want: "not a JSON object"},
 		{name: "trailing object after close", doc: `{"a":1}{"b":2}`, want: "unexpected token"},
 		{name: "trailing garbage after close", doc: `{"a":1}garbage`, want: "unexpected token"},
+		{name: "malformed nested object", doc: `{"a":{"b":}}`, want: "jsontext"},
+		{name: "malformed array", doc: `{"a":[1,}`, want: "jsontext"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -130,5 +130,110 @@ func TestDecode_RejectsUnsupportedDocuments(t *testing.T) {
 				t.Fatalf("Decode error = %v, want containing %q", err, tt.want)
 			}
 		})
+	}
+}
+
+// TestDecode_NestedObject checks a nested object decodes into record.KindMap, recursively, rather
+// than being rejected.
+func TestDecode_NestedObject(t *testing.T) {
+	rec, err := jsonio.NewObjectDecoder().Decode(nil, []byte(`{"id":1,"attributes":{"a":"x","b":2}}`))
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+	if len(rec) != 2 {
+		t.Fatalf("decoded %d fields, want 2", len(rec))
+	}
+
+	attrs, ok := rec.Lookup("attributes")
+	if !ok {
+		t.Fatal("decoded record has no \"attributes\" field")
+	}
+	if attrs.Kind != record.KindMap {
+		t.Fatalf("attributes.Kind = %v, want KindMap", attrs.Kind)
+	}
+	if len(attrs.Map) != 2 {
+		t.Fatalf("attributes has %d entries, want 2", len(attrs.Map))
+	}
+	if a, aOK := attrs.Map.Lookup("a"); !aOK || string(a.Str) != "x" {
+		t.Errorf("attributes.a = %+v, want KindBytes \"x\"", a)
+	}
+	if b, bOK := attrs.Map.Lookup("b"); !bOK || b.I64 != 2 {
+		t.Errorf("attributes.b = %+v, want KindInt64 2", b)
+	}
+}
+
+// TestDecode_NestedArray checks an array decodes into record.KindList, preserving element order
+// and each element's own Kind — including a nested object inside the array.
+func TestDecode_NestedArray(t *testing.T) {
+	rec, err := jsonio.NewObjectDecoder().Decode(nil, []byte(`{"tags":["a",2,{"k":"v"},null]}`))
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+
+	tags, ok := rec.Lookup("tags")
+	if !ok {
+		t.Fatal("decoded record has no \"tags\" field")
+	}
+	if tags.Kind != record.KindList {
+		t.Fatalf("tags.Kind = %v, want KindList", tags.Kind)
+	}
+	if len(tags.List) != 4 {
+		t.Fatalf("tags has %d elements, want 4", len(tags.List))
+	}
+	if tags.List[0].Kind != record.KindBytes || string(tags.List[0].Str) != "a" {
+		t.Errorf("tags[0] = %+v, want KindBytes \"a\"", tags.List[0])
+	}
+	if tags.List[1].Kind != record.KindInt64 || tags.List[1].I64 != 2 {
+		t.Errorf("tags[1] = %+v, want KindInt64 2", tags.List[1])
+	}
+	if tags.List[2].Kind != record.KindMap {
+		t.Errorf("tags[2] = %+v, want KindMap", tags.List[2])
+	} else if k, kOK := tags.List[2].Map.Lookup("k"); !kOK || string(k.Str) != "v" {
+		t.Errorf("tags[2].k = %+v, want KindBytes \"v\"", k)
+	}
+	if tags.List[3].Kind != record.KindNull {
+		t.Errorf("tags[3] = %+v, want KindNull", tags.List[3])
+	}
+}
+
+// TestDecode_EmptyNestedObjectAndArray checks an empty nested object/array decodes to a zero-length
+// KindMap/KindList rather than erroring.
+func TestDecode_EmptyNestedObjectAndArray(t *testing.T) {
+	rec, err := jsonio.NewObjectDecoder().Decode(nil, []byte(`{"m":{},"l":[]}`))
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+
+	m, ok := rec.Lookup("m")
+	if !ok || m.Kind != record.KindMap || len(m.Map) != 0 {
+		t.Errorf("m = %+v, want empty KindMap", m)
+	}
+	l, ok := rec.Lookup("l")
+	if !ok || l.Kind != record.KindList || len(l.List) != 0 {
+		t.Errorf("l = %+v, want empty KindList", l)
+	}
+}
+
+// TestDecode_DeeplyNested checks recursion isn't limited to one level: an object nested inside an
+// array nested inside an object.
+func TestDecode_DeeplyNested(t *testing.T) {
+	rec, err := jsonio.NewObjectDecoder().Decode(nil, []byte(`{"a":{"b":[{"c":1}]}}`))
+	if err != nil {
+		t.Fatalf("Decode: %v", err)
+	}
+
+	a, ok := rec.Lookup("a")
+	if !ok || a.Kind != record.KindMap {
+		t.Fatalf("a = %+v, want KindMap", a)
+	}
+	b, ok := a.Map.Lookup("b")
+	if !ok || b.Kind != record.KindList || len(b.List) != 1 {
+		t.Fatalf("a.b = %+v, want KindList of length 1", b)
+	}
+	if b.List[0].Kind != record.KindMap {
+		t.Fatalf("a.b[0] = %+v, want KindMap", b.List[0])
+	}
+	if c, cOK := b.List[0].Map.Lookup("c"); !cOK || c.I64 != 1 {
+		t.Errorf("a.b[0].c = %+v, want KindInt64 1", c)
 	}
 }
