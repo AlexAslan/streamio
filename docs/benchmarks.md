@@ -1,10 +1,6 @@
 # Benchmarks
 
-Every claim below is measured, not asserted — each number comes from an actual `go test -bench`
-run on the machine this doc was last updated on (Apple M3 Max, `GOMAXPROCS=16`), not an estimate.
-Numbers are illustrative of relative shape and tradeoffs, not a performance guarantee: rerun the
-commands below before relying on any of this for capacity planning, since absolute throughput is
-machine- and Go-version-dependent even when the relative shape holds.
+Measured on Apple M3 Max, `GOMAXPROCS=16`. Rerun before using for capacity planning.
 
 | Benchmark | File | What it answers |
 |---|---|---|
@@ -12,10 +8,10 @@ machine- and Go-version-dependent even when the relative shape holds.
 | `BenchmarkNDJSONProcess*` | `internal/jsonio/ndjson_bench_test.go` | NDJSON throughput across document sizes and buffer sizes. |
 | `BenchmarkProcess_Dispatch` | `streamio_bench_test.go` | `ProcessFile`'s own format-detection/routing overhead, isolated from decode/encode cost. |
 | `BenchmarkEncoder_BatchVsStreaming` | `internal/parquetio/encoder_bench_test.go` | Whether the CLI's single-continuous-file Parquet output (`streamingEncoder`) costs anything over the library's default one-file-per-batch encoder. |
-| `BenchmarkStreamingEncoder_MemoryBoundedness` | `internal/parquetio/encoder_bench_test.go` | Whether streaming output's per-flush memory actually stays bounded as total output size grows — and what does scale instead. |
+| `BenchmarkStreamingEncoder_MemoryBoundedness` | `internal/parquetio/encoder_bench_test.go` | Whether streaming output's per-flush memory actually stays bounded as total output size grows. |
 | `BenchmarkTransformRecord_RenameAndDrop` | `internal/options/transform_bench_test.go` | Per-record cost of `WithTransforms`' rename/drop hook, across record widths. |
-| `BenchmarkRunConvert` | `cmd/convert_bench_test.go` | The CLI's actual end-to-end throughput (flag wiring + real file I/O), for every one of the 5×5 = 25 in→out pairs across every format the CLI supports (NDJSON, Parquet, CSV, TSV, Arrow), at 20,000 rows. |
-| `BenchmarkRunConvert_LargeScale` | `cmd/convert_bench_test.go` | The same 25 pairs, at 10,000,000 rows — confirming steady-state throughput holds, and that this scale doesn't blow past parquet-go's row-group cap when `--batch-size` is chosen sensibly. Not run by default; see below. |
+| `BenchmarkRunConvert` | `cmd/convert_bench_test.go` | CLI end-to-end throughput, all 5×5 = 25 in→out pairs, 20,000 rows. |
+| `BenchmarkRunConvert_LargeScale` | `cmd/convert_bench_test.go` | Same 25 pairs, 10,000,000 rows. Not run by default. |
 
 ## Batch-per-file vs. single continuous file (Parquet output)
 
@@ -32,12 +28,6 @@ go test ./internal/parquetio/... -bench=BenchmarkEncoder_BatchVsStreaming -bench
 | 10,000 | default | 160 | 4,639,659 | 317 |
 | 10,000 | streaming | 163 | 4,617,913 | 317 |
 
-Streaming output is never slower than the default per-batch-file encoder here, and noticeably
-cheaper at small batch sizes (it skips writing a fresh magic-bytes-plus-footer for every batch); the
-two converge as batch size grows, since per-batch framing overhead becomes negligible relative to
-row-encoding cost either way. There's no throughput reason to prefer the default encoder over
-streaming output at any batch size measured.
-
 ## Streaming output's memory boundedness
 
 ```
@@ -51,35 +41,8 @@ go test ./internal/parquetio/... -bench=BenchmarkStreamingEncoder_MemoryBoundedn
 | 100 | 1,000,000 | 10,000 | 32,768 B | 6,334,203 B |
 | 100,000 | 100,000,000 | 1,000 | 5,931,008 B | 2,141,220 B |
 
-This is the more interesting — and more honest — result than a blanket "memory is bounded" claim
-would be. Two separate, both true, stories:
-
-- **`max-flush-bytes` never scales with total row count at a fixed batch size** — flat at 32,768 B
-  across the first three rows (a 100× growth in total rows, batch size held at 100). But it is
-  **not** a universal constant: the fourth row, at a 1,000× larger batch size (100,000 rows/batch),
-  shows a ~5.9 MB max flush instead. That's expected — a single large batch can produce more encoded
-  bytes than the writer's small internal buffer holds before that call's own `Flush` forces them
-  out — so the precise claim is peak memory per call is bounded by `max(one batch's encoded size,
-  the writer's internal buffer)`, not by a fixed number, and never by total row/batch count.
-- **`finalize-bytes` scales with row-group count** (one per batch) — the Parquet footer lists
-  per-row-group column metadata for every row group in the file, which is inherent to the format,
-  not something this encoder could avoid. Note how row 3 (10,000 row groups) has a *larger* footer
-  than row 4 (1,000 row groups, 100× more total rows): footer size tracks row-group count, not row
-  count.
-
-**A hard ceiling this benchmark deliberately stays under:** parquet-go caps a file at 32,767 row
-groups (`math.MaxInt16`) — past that, `EncodeBatch` fails the whole conversion outright with a
-wrapped `ErrTooManyRowGroups`, rather than merely producing a larger footer (pinned by
-`TestStreamingEncoder_TooManyRowGroupsFailsRatherThanSilentlyGrowing` in
-`internal/parquetio/streaming_encoder_test.go`). This is a real, previously undocumented constraint
-this benchmark pass surfaced while scaling up to 100,000,000 rows: the library's default
-`--batch-size` (512) would produce ~195,000 row groups at that scale — six times over the cap,
-failing outright. **The CLI's `--help` now documents this**, and `runConvert` (`cmd/convert.go`)
-catches `errors.Is(err, parquetgo.ErrTooManyRowGroups)` specifically to add an actionable
-`--batch-size` hint instead of surfacing parquet-go's bare error text — see
-`TestRunConvert_TooSmallBatchSizeGetsAnActionableError` in `cmd/convert_test.go`. The practical
-takeaway for any caller converting a very large input to Parquet: choose `--batch-size` so total
-rows ÷ batch size stays well under 32,767.
+parquet-go caps a file at 32,767 row groups (`math.MaxInt16`); choose `--batch-size` so total rows ÷
+batch size stays well under that.
 
 ## Record-transform overhead
 
@@ -93,19 +56,11 @@ go test ./internal/options/... -bench=BenchmarkTransformRecord_RenameAndDrop -be
 | 16 fields | 687 | 0 |
 | 64 fields | 1,715 | 0 |
 
-Zero allocations at every width, confirming `transformRecord`'s in-place filter (`rec[:0]`, see
-`internal/options/transform.go`) does what it's documented to do. Cost scales roughly linearly with
-field count, as expected for a single linear scan per record.
-
 ## CLI end-to-end
 
 ```
 go test ./cmd/... -bench=BenchmarkRunConvert -benchmem -run '^$'
 ```
-
-Covers all 5×5 = 25 in→out pairs across every format the CLI supports (`cmd/convert_bench_test.go`'s
-`benchAllPairCases`), the same matrix `TestConvertMatrix_AllFormatPairs`
-(`cmd/convert_matrix_test.go`) verifies for correctness.
 
 **20,000 rows:**
 
@@ -137,7 +92,7 @@ Covers all 5×5 = 25 in→out pairs across every format the CLI supports (`cmd/c
 | arrow→tsv | 164.1 | 1,521,640 | 22,284 |
 | arrow→arrow | 125.7 | 2,919,816 | 24,522 |
 
-At 10,000,000 rows (`BenchmarkRunConvert_LargeScale`, not run by default —
+**10,000,000 rows** (`BenchmarkRunConvert_LargeScale`, not run by default —
 `go test ./cmd/... -bench=BenchmarkRunConvert_LargeScale -benchmem -run '^$' -timeout=30m`):
 
 | in → out | ns/row | B/op | allocs/op |
