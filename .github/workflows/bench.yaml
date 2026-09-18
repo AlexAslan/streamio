@@ -47,22 +47,27 @@ jobs:
       # every iteration, and benchstat chokes trying to parse those lines as results
       # ("parsing iteration count: invalid syntax"). grep -E filters the piped output down to
       # lines benchstat actually understands before either file is written.
+      # -count=6 is benchstat's own documented minimum sample size for a confidence interval
+      # (fewer samples get a "need >= 6 samples" footnote instead of a real range) — the
+      # smallest count that still gives a statistically meaningful comparison, chosen over the
+      # original -count=10 to cut this job's runtime given BenchmarkRunConvert alone is 25
+      # cases run twice (base and HEAD).
       - name: Benchmark base branch
         run: |
           git checkout ${{ github.event.pull_request.base.sha }}
-          go test -run='^$' -bench='${{ steps.pattern.outputs.pattern }}' -benchtime=1x -count=10 -timeout=20m ./... \
+          go test -run='^$' -bench='${{ steps.pattern.outputs.pattern }}' -benchtime=1x -count=6 -timeout=20m ./... \
             | tee bench-base-raw.txt \
             | grep -E '^(goos|goarch|pkg|cpu|Benchmark|PASS|FAIL|ok[[:space:]])' > bench-base.txt
 
       - name: Benchmark PR HEAD
         run: |
           git checkout ${{ github.event.pull_request.head.sha }}
-          go test -run='^$' -bench='${{ steps.pattern.outputs.pattern }}' -benchtime=1x -count=10 -timeout=20m ./... \
+          go test -run='^$' -bench='${{ steps.pattern.outputs.pattern }}' -benchtime=1x -count=6 -timeout=20m ./... \
             | tee bench-head-raw.txt \
             | grep -E '^(goos|goarch|pkg|cpu|Benchmark|PASS|FAIL|ok[[:space:]])' > bench-head.txt
 
       # Renders the template by reading benchstat's diff straight from disk instead of routing
-      # it through the environment (envsubst's approach): with count=10 runs of 25 benchmark
+      # it through the environment (envsubst's approach): with count=6 runs of 25 benchmark
       # cases, that output is easily large enough to blow past the OS's ARG_MAX for a single
       # exec's environment block, which envsubst hit outright. The comment itself only carries
       # the benchstat diff, not the raw per-iteration output — that output alone is large
