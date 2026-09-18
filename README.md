@@ -360,22 +360,6 @@ Two small packages exist purely to let a future format join without touching `pa
   capability doesn't exist for the format yet, and `processRecords` reports which half of a pair is
   missing via `ErrNoConversionPath`.
 
-### Adding a format
-
-`internal/csvio` is the reference example: it added CSV and TSV support (one package for both,
-parameterized by delimiter) by supplying:
-
-1. `FormatCSV`/`FormatTSV` constants, exposed by the root package.
-2. `csvio.NewDecoder`/`csvio.NewEncoder`/`csvio.NewRawSource`, matching the `formatio` interfaces
-   every other format package implements. CSV has no type system of its own, so every decoded field
-   is `record.KindBytes` — a deliberate scope limit, not a placeholder for future sniffing.
-3. One new registry case in `formatSupportFor`, filling in those fields.
-
-`parquetio` and `jsonio` needed no changes, and CSV→JSON, CSV→Parquet, JSON→CSV, and Parquet→CSV all
-work through `processRecords`'s generic loop with no CSV-specific code in either package. Arrow IPC
-support (`internal/arrowio`) followed the identical seam later, needing no changes to `parquetio`,
-`jsonio`, or `csvio` either.
-
 ## Configuration (`streamio.Option`)
 
 | Option | Default | Effect |
