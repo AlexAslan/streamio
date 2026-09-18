@@ -3,8 +3,9 @@ package csvio
 import (
 	"fmt"
 	"strconv"
-	"streamio/internal/jsonio"
-	"streamio/internal/record"
+
+	"github.com/AlexAslan/streamio/internal/jsonio"
+	"github.com/AlexAslan/streamio/internal/record"
 )
 
 // renderValue appends v's plain-text CSV/TSV rendering to dst and returns the extended slice, with

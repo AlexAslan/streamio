@@ -1,8 +1,9 @@
 package record_test
 
 import (
-	"streamio/internal/record"
 	"testing"
+
+	"github.com/AlexAslan/streamio/internal/record"
 )
 
 // allocRuns is the sample size for every testing.AllocsPerRun assertion here. Large enough that a

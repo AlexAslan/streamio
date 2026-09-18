@@ -5,10 +5,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"streamio"
 	"testing"
 
 	parquetgo "github.com/parquet-go/parquet-go"
+
+	"github.com/AlexAslan/streamio"
 )
 
 // writeBenchParquet creates a small single-row parquet fixture for Process dispatch benchmarks.

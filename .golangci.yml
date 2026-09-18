@@ -175,8 +175,18 @@ issues:
   max-same-issues: 50
 formatters:
   enable:
+    - gci
     - goimports
     - gofumpt
+  settings:
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(github.com/AlexAslan/streamio)
+    goimports:
+      local-prefixes:
+        - github.com/AlexAslan/streamio
   exclusions:
     generated: lax
     paths:

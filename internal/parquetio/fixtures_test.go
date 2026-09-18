@@ -4,10 +4,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"streamio/internal/options"
 	"testing"
 
 	parquetgo "github.com/parquet-go/parquet-go"
+
+	"github.com/AlexAslan/streamio/internal/options"
 )
 
 // newConfig builds a options.Config with the given batchSize/workers, leaving every other field

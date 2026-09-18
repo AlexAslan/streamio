@@ -12,9 +12,10 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"streamio/internal/options"
 	"sync"
 	"sync/atomic"
+
+	"github.com/AlexAslan/streamio/internal/options"
 )
 
 // defaultDelimiter is used when cfg.CSV.Delimiter is unset and the format itself doesn't say

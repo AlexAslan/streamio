@@ -3,8 +3,9 @@ package csvio_test
 import (
 	"os"
 	"path/filepath"
-	"streamio/internal/options"
 	"testing"
+
+	"github.com/AlexAslan/streamio/internal/options"
 )
 
 // newConfig builds an options.Config for the given delimiter/header settings, leaving every other

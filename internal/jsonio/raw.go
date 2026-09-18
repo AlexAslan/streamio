@@ -2,9 +2,10 @@ package jsonio
 
 import (
 	"context"
-	"streamio/internal/formatio"
-	"streamio/internal/options"
-	"streamio/internal/pool"
+
+	"github.com/AlexAslan/streamio/internal/formatio"
+	"github.com/AlexAslan/streamio/internal/options"
+	"github.com/AlexAslan/streamio/internal/pool"
 )
 
 // rawSource streams an NDJSON source's own lines to the sink. It implements formatio.RawSource.

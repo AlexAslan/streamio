@@ -6,9 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"streamio/internal/formatio"
-	"streamio/internal/options"
-	"streamio/internal/record"
+
+	"github.com/AlexAslan/streamio/internal/formatio"
+	"github.com/AlexAslan/streamio/internal/options"
+	"github.com/AlexAslan/streamio/internal/record"
 )
 
 // errFieldCountMismatch reports a row whose field count doesn't match the header (or, headerless,

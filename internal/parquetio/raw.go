@@ -4,12 +4,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"streamio/internal/formatio"
-	"streamio/internal/options"
-	"streamio/internal/pool"
 	"time"
 
 	parquetgo "github.com/parquet-go/parquet-go"
+
+	"github.com/AlexAslan/streamio/internal/formatio"
+	"github.com/AlexAslan/streamio/internal/options"
+	"github.com/AlexAslan/streamio/internal/pool"
 )
 
 // rawSource streams a Parquet source's own bytes to the sink, one standalone row group per

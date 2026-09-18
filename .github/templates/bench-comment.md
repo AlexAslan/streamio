@@ -6,23 +6,8 @@
 ${BENCHSTAT_OUT}
 ```
 
-<details>
-<summary>Raw base output</summary>
-
-```
-${RAW_BASE}
-```
-
-</details>
-
-<details>
-<summary>Raw HEAD output</summary>
-
-```
-${RAW_HEAD}
-```
-
-</details>
+Full raw `go test -bench` output for both runs is attached to this workflow run's
+`bench-comment` artifact (retained for 1 day).
 
 ---
 *Last updated for commit `${HEAD_SHORT}`*

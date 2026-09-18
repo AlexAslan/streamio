@@ -6,11 +6,12 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"streamio"
 	"strings"
 	"testing"
 
 	parquetgo "github.com/parquet-go/parquet-go"
+
+	"github.com/AlexAslan/streamio"
 )
 
 // benchRow is deliberately wider than the one-field fixtures elsewhere in this package: the cost
@@ -212,10 +213,9 @@ func BenchmarkProcessFile_ParquetFormats_RowGroupSize(b *testing.B) {
 }
 
 // BenchmarkProcessFile_ParquetFormats_Workers measures how each route parallelizes across
-// row-group decode workers — the ClickHouse direct-insert path's actual concurrency profile.
-// Raw passthrough is a verbatim compressed-byte copy (I/O/memcpy-bound), while JSON-decode does
-// real per-value CPU work and allocates a document per row; the two are expected to scale
-// differently with added workers.
+// row-group decode workers. Raw passthrough is a verbatim compressed-byte copy
+// (I/O/memcpy-bound), while JSON-decode does real per-value CPU work and allocates a document per
+// row; the two are expected to scale differently with added workers.
 func BenchmarkProcessFile_ParquetFormats_Workers(b *testing.B) {
 	const rows = 100_000
 	const rowsPerGroup = 6_250 // 16 row groups, enough to keep every worker count below busy.

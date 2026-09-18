@@ -8,17 +8,18 @@ import (
 	"path/filepath"
 	"reflect"
 	"strconv"
-	"streamio"
-	"streamio/internal/formatio"
-	"streamio/internal/jsonio"
-	"streamio/internal/options"
-	"streamio/internal/pool"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	parquetgo "github.com/parquet-go/parquet-go"
+
+	"github.com/AlexAslan/streamio"
+	"github.com/AlexAslan/streamio/internal/formatio"
+	"github.com/AlexAslan/streamio/internal/jsonio"
+	"github.com/AlexAslan/streamio/internal/options"
+	"github.com/AlexAslan/streamio/internal/pool"
 )
 
 // identityRow deliberately carries one column of every shape whose JSON rendering could go wrong on

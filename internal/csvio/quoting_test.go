@@ -4,10 +4,11 @@ import (
 	"bytes"
 	"encoding/csv"
 	"math/rand"
-	"streamio/internal/record"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/AlexAslan/streamio/internal/record"
 )
 
 // TestEncode_MatchesEncodingCSVQuoting checks the encoder's output is byte-identical to

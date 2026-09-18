@@ -5,11 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"streamio"
 	"strings"
 
 	parquetgo "github.com/parquet-go/parquet-go"
 	"github.com/spf13/cobra"
+
+	"github.com/AlexAslan/streamio"
 )
 
 // errUnknownFormat is returned when --in-format or --out-format names an unsupported format.

@@ -5,13 +5,14 @@ import (
 	"errors"
 	"io"
 	"strconv"
-	"streamio/internal/csvio"
-	"streamio/internal/formatio"
-	"streamio/internal/options"
-	"streamio/internal/record"
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/AlexAslan/streamio/internal/csvio"
+	"github.com/AlexAslan/streamio/internal/formatio"
+	"github.com/AlexAslan/streamio/internal/options"
+	"github.com/AlexAslan/streamio/internal/record"
 )
 
 // openRecordDecoder opens a decoder over path and registers its Close, along with the underlying

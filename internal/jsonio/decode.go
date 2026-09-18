@@ -6,7 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"streamio/internal/pool"
+
+	"github.com/AlexAslan/streamio/internal/pool"
 )
 
 // chunkDecoder decodes a disjoint share of s's byte-range chunks, claimed from its shared queue.

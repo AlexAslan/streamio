@@ -4,12 +4,13 @@ import (
 	"context"
 	"errors"
 	"io"
-	"streamio/internal/formatio"
-	"streamio/internal/options"
-	"streamio/internal/record"
 
 	parquetgo "github.com/parquet-go/parquet-go"
 	"github.com/parquet-go/parquet-go/format"
+
+	"github.com/AlexAslan/streamio/internal/formatio"
+	"github.com/AlexAslan/streamio/internal/options"
+	"github.com/AlexAslan/streamio/internal/record"
 )
 
 // recordDecoder decodes a disjoint share of s's row groups into canonical records. It implements

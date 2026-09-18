@@ -1,5 +1,5 @@
 // Command streamio-cli converts a document file between the formats streamio
-// supports (NDJSON and Parquet).
+// supports (NDJSON, Parquet, CSV, TSV, and Arrow IPC).
 package main
 
 import (
@@ -12,7 +12,7 @@ import (
 func main() {
 	root := &cobra.Command{
 		Use:   "streamio",
-		Short: "Convert document files between NDJSON and Parquet",
+		Short: "Convert document files between NDJSON, Parquet, CSV, TSV, and Arrow IPC",
 	}
 	root.AddCommand(getConvertCmd())
 

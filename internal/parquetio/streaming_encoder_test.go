@@ -2,12 +2,13 @@ package parquetio_test
 
 import (
 	"bytes"
-	"streamio/internal/formatio"
-	"streamio/internal/options"
-	"streamio/internal/parquetio"
-	"streamio/internal/record"
 	"strings"
 	"testing"
+
+	"github.com/AlexAslan/streamio/internal/formatio"
+	"github.com/AlexAslan/streamio/internal/options"
+	"github.com/AlexAslan/streamio/internal/parquetio"
+	"github.com/AlexAslan/streamio/internal/record"
 )
 
 // newStreamingEncoder builds a streaming encoder with the default options, failing the test rather

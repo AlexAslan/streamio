@@ -4,12 +4,13 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"streamio/internal/formatio"
-	"streamio/internal/options"
-	"streamio/internal/record"
 
 	"github.com/apache/arrow-go/v18/arrow"
 	"github.com/apache/arrow-go/v18/arrow/array"
+
+	"github.com/AlexAslan/streamio/internal/formatio"
+	"github.com/AlexAslan/streamio/internal/options"
+	"github.com/AlexAslan/streamio/internal/record"
 )
 
 // columnMeta is one top-level column's schema-derived classification, looked up once per file

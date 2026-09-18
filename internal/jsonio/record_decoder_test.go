@@ -5,13 +5,14 @@ import (
 	"errors"
 	"io"
 	"math"
-	"streamio/internal/formatio"
-	"streamio/internal/jsonio"
-	"streamio/internal/options"
-	"streamio/internal/record"
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/AlexAslan/streamio/internal/formatio"
+	"github.com/AlexAslan/streamio/internal/jsonio"
+	"github.com/AlexAslan/streamio/internal/options"
+	"github.com/AlexAslan/streamio/internal/record"
 )
 
 // decodedField is one field of a decoded line, flattened to something a table can state literally.

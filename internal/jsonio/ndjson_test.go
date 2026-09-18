@@ -10,10 +10,11 @@ import (
 	"runtime"
 	"slices"
 	"sort"
-	"streamio/internal/options"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/AlexAslan/streamio/internal/options"
 )
 
 // newConfig builds a options.Config with the given workers/chunkSize/readBufferSize, leaving

@@ -2,9 +2,10 @@ package options_test
 
 import (
 	"fmt"
-	"streamio/internal/options"
-	"streamio/internal/record"
 	"testing"
+
+	"github.com/AlexAslan/streamio/internal/options"
+	"github.com/AlexAslan/streamio/internal/record"
 )
 
 // genTransformBenchRecord builds a record with n top-level scalar fields plus one nested

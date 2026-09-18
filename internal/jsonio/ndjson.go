@@ -2,8 +2,9 @@ package jsonio
 
 import (
 	"io"
-	"streamio/internal/options"
 	"sync/atomic"
+
+	"github.com/AlexAslan/streamio/internal/options"
 )
 
 // sharedState is read-only once built (aside from its atomics) and shared by every decode worker.

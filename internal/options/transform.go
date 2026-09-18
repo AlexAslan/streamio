@@ -3,8 +3,9 @@ package options
 import (
 	"errors"
 	"fmt"
-	"streamio/internal/record"
 	"strings"
+
+	"github.com/AlexAslan/streamio/internal/record"
 )
 
 // PathTransformRule is one declarative path-level transform. Use RenamePath and DropPath to

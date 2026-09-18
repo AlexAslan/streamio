@@ -6,13 +6,14 @@ import (
 	"errors"
 	"io"
 	"strconv"
-	"streamio/internal/formatio"
-	"streamio/internal/options"
-	"streamio/internal/pool"
-	"streamio/internal/record"
 	"sync"
 	"sync/atomic"
 	"testing"
+
+	"github.com/AlexAslan/streamio/internal/formatio"
+	"github.com/AlexAslan/streamio/internal/options"
+	"github.com/AlexAslan/streamio/internal/pool"
+	"github.com/AlexAslan/streamio/internal/record"
 )
 
 // countingDecoder yields total records numbered from a shared counter, so siblings handed out by

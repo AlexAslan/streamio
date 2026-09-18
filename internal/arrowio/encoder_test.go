@@ -2,14 +2,15 @@ package arrowio_test
 
 import (
 	"bytes"
-	"streamio/internal/arrowio"
-	"streamio/internal/formatio"
-	"streamio/internal/options"
-	"streamio/internal/record"
 	"strings"
 	"testing"
 
 	"github.com/apache/arrow-go/v18/arrow/ipc"
+
+	"github.com/AlexAslan/streamio/internal/arrowio"
+	"github.com/AlexAslan/streamio/internal/formatio"
+	"github.com/AlexAslan/streamio/internal/options"
+	"github.com/AlexAslan/streamio/internal/record"
 )
 
 // newBatchEncoder builds an encoder with the default options, failing the test rather than

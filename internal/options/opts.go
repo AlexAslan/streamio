@@ -4,7 +4,8 @@ package options
 
 import (
 	"io"
-	"streamio/internal/record"
+
+	"github.com/AlexAslan/streamio/internal/record"
 )
 
 // Source is a sized, randomly-addressable byte source: what every format's chunked-parallel

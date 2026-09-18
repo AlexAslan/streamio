@@ -4,10 +4,11 @@ import (
 	"context"
 	"errors"
 	"io"
-	"streamio/internal/formatio"
-	"streamio/internal/options"
-	"streamio/internal/record"
 	"time"
+
+	"github.com/AlexAslan/streamio/internal/formatio"
+	"github.com/AlexAslan/streamio/internal/options"
+	"github.com/AlexAslan/streamio/internal/record"
 )
 
 // RunRecords runs the pool over the generic cross-format path: decode the input into canonical

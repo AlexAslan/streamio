@@ -9,9 +9,10 @@ package formatio
 import (
 	"context"
 	"io"
-	"streamio/internal/record"
 	"sync"
 	"sync/atomic"
+
+	"github.com/AlexAslan/streamio/internal/record"
 )
 
 // RawSource streams a file's own native-format bytes straight to the sink, bypassing any
