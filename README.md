@@ -1,11 +1,8 @@
 # streamio
 
-Reads NDJSON, Parquet, CSV, TSV, and Arrow IPC files and pushes their documents to a caller-provided
-document handler (a "document" is whatever unit the caller bulk-indexes or bulk-inserts downstream —
-one JSON object, one Parquet row group, or one synthesized Parquet file, depending on route). The
-caller chooses what format the documents come out in; when that matches the file's own native
-format, the file's bytes go straight to the handler with no decode step at all. Decoding and dispatch
-run concurrently across a shared worker pool so a slow handler doesn't stall decoding, and vice versa.
+A Go library and CLI for converting between NDJSON, Parquet, CSV, TSV, and Arrow IPC. Any format can
+be read and written, decoding and dispatch run concurrently on a shared worker pool, and when the
+input and output formats match, bytes are streamed straight through with no decode step at all.
 
 ## Docs
 
