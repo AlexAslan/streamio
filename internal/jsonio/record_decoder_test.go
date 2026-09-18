@@ -3,7 +3,6 @@ package jsonio_test
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"math"
 	"streamio/internal/formatio"
@@ -73,12 +72,13 @@ func mustDrainRecords(tb testing.TB, dec formatio.RecordDecoder, batchSize int) 
 	return lines
 }
 
-// openRecordDecoder opens a decoder over path and registers its Close.
+// openRecordDecoder opens a decoder over path and registers its Close, along with the underlying
+// file's, since NewDecoder no longer owns opening or closing the file itself.
 //
 //nolint:ireturn // formatio.RecordDecoder is exactly what the constructor under test returns.
 func openRecordDecoder(tb testing.TB, path string, cfg options.Config) formatio.RecordDecoder {
 	tb.Helper()
-	dec, err := jsonio.NewDecoder(cfg, path)
+	dec, err := jsonio.NewDecoder(cfg, openSource(tb, path))
 	if err != nil {
 		tb.Fatalf("NewDecoder: %v", err)
 	}
@@ -400,14 +400,5 @@ func TestNewDecoder_ContextCancellation(t *testing.T) {
 	batch := make([]record.Record, 8)
 	if _, err := dec.DecodeNext(ctx, batch); !errors.Is(err, context.Canceled) {
 		t.Fatalf("DecodeNext error = %v, want context.Canceled", err)
-	}
-}
-
-// TestNewDecoder_MissingFile checks the constructor surfaces an open failure rather than returning
-// a decoder that fails later.
-func TestNewDecoder_MissingFile(t *testing.T) {
-	_, err := jsonio.NewDecoder(newConfig(1, 0, 0), fmt.Sprintf("%s/absent.ndjson", t.TempDir()))
-	if err == nil {
-		t.Fatal("NewDecoder on a missing file returned no error")
 	}
 }

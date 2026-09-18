@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"streamio/internal/formatio"
 	"streamio/internal/options"
 	"streamio/internal/record"
@@ -27,30 +26,25 @@ var errFieldCountMismatch = errors.New("csv: row has a different field count tha
 type recordDecoder struct {
 	s *sharedState
 
-	// f is the open input file, held by the decoder NewDecoder returned and nil on every sibling
-	// Split handed out: the file is opened once and closed once.
-	f *os.File
-
 	// rows reads the chunk this decoder currently owns, nil when it owns none.
 	rows *csvRowReader
 }
 
-// NewDecoder opens the CSV/TSV file at path as a stream of canonical records. The caller owns the
-// returned decoder and must Close it.
+// NewDecoder opens src as a stream of canonical records. NewDecoder does not take ownership of
+// src.Reader; the caller closes it, if it needs closing, once done with every decoder Split hands
+// out.
 //
 //nolint:ireturn // formatio.RecordDecoder is the constructor type streamio's format registry stores.
-func NewDecoder(cfg options.Config, path string) (formatio.RecordDecoder, error) {
-	f, s, err := openShared(cfg, path, cfg.InputFormat)
+func NewDecoder(cfg options.Config, src options.Source) (formatio.RecordDecoder, error) {
+	s, err := openShared(cfg, src, cfg.InputFormat)
 	if err != nil {
 		return nil, err
 	}
 
-	d := s.newRecordDecoder()
-	d.f = f
-	return d, nil
+	return s.newRecordDecoder(), nil
 }
 
-// newRecordDecoder builds one decode worker's decoder over s, with no ownership of the input file.
+// newRecordDecoder builds one decode worker's decoder over s.
 func (s *sharedState) newRecordDecoder() *recordDecoder {
 	return &recordDecoder{s: s}
 }
@@ -75,13 +69,9 @@ func (d *recordDecoder) Split(limit int) []formatio.RecordDecoder {
 	return decoders
 }
 
-// Close releases the open input file. It is only meaningful on the decoder NewDecoder returned; a
-// Split sibling holds no file and closing it is a no-op.
+// Close is a no-op: recordDecoder does not own src.Reader.
 func (d *recordDecoder) Close() error {
-	if d.f == nil {
-		return nil
-	}
-	return d.f.Close()
+	return nil
 }
 
 // DecodeNext fills batch with the next rows of this decoder's share of the file, claiming further
@@ -134,7 +124,7 @@ func (d *recordDecoder) openNextChunk() (bool, error) {
 
 	rows, err := d.s.openChunkRows(chunkIdx, chunkStart)
 	if err != nil {
-		return false, fmt.Errorf("csv %s: chunk %d: %w", d.s.path, chunkIdx, err)
+		return false, fmt.Errorf("csv %s: chunk %d: %w", d.s.name, chunkIdx, err)
 	}
 
 	d.rows = rows
@@ -148,7 +138,7 @@ func (d *recordDecoder) decodeRow(rec record.Record, fields []string) (record.Re
 	header := d.s.ensureHeader(len(fields))
 	if len(fields) != len(header) {
 		return rec, fmt.Errorf("csv %s: %w: got %d fields, want %d",
-			d.s.path, errFieldCountMismatch, len(fields), len(header))
+			d.s.name, errFieldCountMismatch, len(fields), len(header))
 	}
 
 	rec = rec.Reset()

@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"streamio/internal/csvio"
 	"streamio/internal/formatio"
@@ -24,12 +25,12 @@ var ErrNoConversionPath = errors.New("streamio: no conversion path")
 // formatSupport is one format's entry in the registry: what it can do as an input and as an
 // output. A nil field means that capability isn't implemented for the format.
 type formatSupport struct {
-	// newRawSource opens path for raw passthrough. Only consulted when the format is both the
+	// newRawSource opens src for raw passthrough. Only consulted when the format is both the
 	// input's native format and the requested output format.
-	newRawSource func(cfg options.Config, path string) (formatio.RawSource, error)
+	newRawSource func(cfg options.Config, src options.Source) (formatio.RawSource, error)
 
-	// newRecordDecoder opens path as a stream of canonical records.
-	newRecordDecoder func(cfg options.Config, path string) (formatio.RecordDecoder, error)
+	// newRecordDecoder opens src as a stream of canonical records.
+	newRecordDecoder func(cfg options.Config, src options.Source) (formatio.RecordDecoder, error)
 
 	// newRecordEncoder builds an encoder rendering a batch of canonical records as documents. How
 	// many documents a batch becomes is the encoder's own business — see formatio.RecordEncoder.
@@ -99,6 +100,41 @@ func ProcessFile(
 	handler DocumentHandler,
 	opts ...Option,
 ) (Result, error) {
+	// Validated before opening path, so an invalid option (e.g. a bad transform rule) is reported
+	// as itself rather than masked by an unrelated "file not found" when path also happens not to
+	// exist.
+	if cfg := options.New(opts...); cfg.OptionErr != nil {
+		return Result{}, cfg.OptionErr
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return Result{}, err
+	}
+	defer f.Close()
+
+	stat, err := f.Stat()
+	if err != nil {
+		return Result{}, err
+	}
+
+	return ProcessReaderAt(ctx, Source{Reader: f, Size: stat.Size(), Name: path}, handler, opts...)
+}
+
+// Source is a sized, randomly-addressable byte source ProcessReaderAt reads from: an *os.File, an
+// in-memory buffer, or anything else providing ReadAt over a known span. Name labels it in
+// diagnostics and error text and need not be a real file path.
+type Source = options.Source
+
+// ProcessReaderAt reads src and calls handler once per document, the same way ProcessFile does for
+// an on-disk file — src need not be backed by a real file, only support ReadAt over its declared
+// Size, which is what every format's chunked-parallel decoder actually requires.
+func ProcessReaderAt(
+	ctx context.Context,
+	src Source,
+	handler DocumentHandler,
+	opts ...Option,
+) (Result, error) {
 	cfg := options.New(opts...)
 	if cfg.OptionErr != nil {
 		return Result{}, cfg.OptionErr
@@ -106,7 +142,7 @@ func ProcessFile(
 	sink := options.DocumentHandler(handler)
 	in := cfg.InputFormat
 	if in == "" {
-		in = DetectInputFormat(path)
+		in = DetectInputFormat(src.Name)
 		cfg.InputFormat = in
 	}
 
@@ -124,15 +160,15 @@ func ProcessFile(
 	// row groups verbatim, trading that verbatim-copy optimization for a file that is actually
 	// valid.
 	if cfg.OutputFormat == in && !cfg.Run.SingleFileOutput {
-		return processRaw(ctx, path, sink, cfg, in)
+		return processRaw(ctx, src, sink, cfg, in)
 	}
-	return processRecords(ctx, path, sink, cfg, in)
+	return processRecords(ctx, src, sink, cfg, in)
 }
 
 // processRaw streams the input's own bytes to the handler, when that's already what was asked for.
 func processRaw(
 	ctx context.Context,
-	path string,
+	src options.Source,
 	sink options.DocumentHandler,
 	cfg options.Config,
 	in options.OutputFormat,
@@ -142,13 +178,13 @@ func processRaw(
 		return options.Result{}, fmt.Errorf("%w: %s has no raw source", ErrNoConversionPath, in)
 	}
 
-	src, err := support.newRawSource(cfg, path)
+	raw, err := support.newRawSource(cfg, src)
 	if err != nil {
 		return options.Result{}, err
 	}
-	defer src.Close()
+	defer raw.Close()
 
-	return pool.RunRaw(ctx, cfg, src, sink)
+	return pool.RunRaw(ctx, cfg, raw, sink)
 }
 
 // processRecords is the generic cross-format path: decode the input to canonical records, then
@@ -158,7 +194,7 @@ func processRaw(
 // what lets a new format be added by filling in one formatSupport entry.
 func processRecords(
 	ctx context.Context,
-	path string,
+	src options.Source,
 	sink options.DocumentHandler,
 	cfg options.Config,
 	in options.OutputFormat,
@@ -177,7 +213,7 @@ func processRecords(
 			ErrNoConversionPath, in, out, out)
 	}
 
-	dec, err := inSupport.newRecordDecoder(cfg, path)
+	dec, err := inSupport.newRecordDecoder(cfg, src)
 	if err != nil {
 		return options.Result{}, err
 	}

@@ -2,7 +2,19 @@
 // along with the transform rules and format constants ProcessFile's callers configure a run with.
 package options
 
-import "streamio/internal/record"
+import (
+	"io"
+	"streamio/internal/record"
+)
+
+// Source is a sized, randomly-addressable byte source: what every format's chunked-parallel
+// decoder actually needs, satisfied by an *os.File or anything else providing ReadAt over a known
+// span. Name labels it in diagnostics and error text; it need not be a real file path.
+type Source struct {
+	Reader io.ReaderAt
+	Name   string
+	Size   int64
+}
 
 // Config holds the options passed to Process.
 type Config struct {

@@ -153,6 +153,22 @@ func TestProcess_ParallelWorkers(t *testing.T) {
 	}
 }
 
+// TestProcessFile_MissingFile checks ProcessFile surfaces the os.Open failure for a nonexistent
+// path, rather than returning a Result that looks like a successful empty run. This is the one
+// place that failure can now surface from: NewRawSource/NewDecoder no longer open the file
+// themselves (see options.Source), so the open happens in ProcessFile before any format package is
+// even reached.
+func TestProcessFile_MissingFile(t *testing.T) {
+	_, err := streamio.ProcessFile(
+		context.Background(),
+		filepath.Join(t.TempDir(), "absent.ndjson"),
+		func(context.Context, []byte) error { return nil },
+	)
+	if err == nil {
+		t.Fatal("ProcessFile on a missing file returned no error")
+	}
+}
+
 func TestProcessFile_InvalidTransformReturnsError(t *testing.T) {
 	_, err := streamio.ProcessFile(
 		context.Background(),

@@ -62,3 +62,19 @@ func writeParquetWithRowGroups(tb testing.TB, n, rgSize int) string {
 	writeParquetRows(tb, path, rows, parquetgo.MaxRowsPerRowGroup(int64(rgSize)))
 	return path
 }
+
+// openSource opens path and returns an options.Source over it, closing the file on test cleanup.
+func openSource(tb testing.TB, path string) options.Source {
+	tb.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		tb.Fatalf("open %s: %v", path, err)
+	}
+	tb.Cleanup(func() { f.Close() })
+
+	stat, err := f.Stat()
+	if err != nil {
+		tb.Fatalf("stat %s: %v", path, err)
+	}
+	return options.Source{Reader: f, Size: stat.Size(), Name: path}
+}

@@ -48,7 +48,7 @@ func TestNewRawSource_SkipsHeaderDispatchesDataRows(t *testing.T) {
 	path := writeCSVFile(t, "id,name\n1,Alice\n2,Bob\n")
 	cfg := newConfig(1, 0, ',', true)
 
-	src, err := csvio.NewRawSource(cfg, path)
+	src, err := csvio.NewRawSource(cfg, openSource(t, path))
 	if err != nil {
 		t.Fatalf("NewRawSource: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestNewRawSource_NoHeaderDispatchesEveryLine(t *testing.T) {
 	path := writeCSVFile(t, "1,Alice\n2,Bob\n")
 	cfg := newConfig(1, 0, ',', false)
 
-	src, err := csvio.NewRawSource(cfg, path)
+	src, err := csvio.NewRawSource(cfg, openSource(t, path))
 	if err != nil {
 		t.Fatalf("NewRawSource: %v", err)
 	}
@@ -94,20 +94,12 @@ func TestNewRawSource_NoHeaderDispatchesEveryLine(t *testing.T) {
 	}
 }
 
-// TestNewRawSource_MissingFile checks the constructor surfaces an open failure.
-func TestNewRawSource_MissingFile(t *testing.T) {
-	_, err := csvio.NewRawSource(newConfig(1, 0, ',', false), t.TempDir()+"/absent.csv")
-	if err == nil {
-		t.Fatal("NewRawSource on a missing file returned no error")
-	}
-}
-
 // TestNewRawSource_EmptyFile checks an empty input dispatches nothing rather than erroring.
 func TestNewRawSource_EmptyFile(t *testing.T) {
 	path := writeCSVFile(t, "")
 	cfg := options.New(options.WithCSVHasHeader(false))
 
-	src, err := csvio.NewRawSource(cfg, path)
+	src, err := csvio.NewRawSource(cfg, openSource(t, path))
 	if err != nil {
 		t.Fatalf("NewRawSource: %v", err)
 	}

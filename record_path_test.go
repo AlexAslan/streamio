@@ -132,15 +132,25 @@ func orderedSink() (streamio.DocumentHandler, func() []string) {
 // the pieces the registry would have wired together is how that pair gets exercised.
 func runGenericRecordPath(
 	tb testing.TB,
-	newDecoder func(options.Config, string) (formatio.RecordDecoder, error),
+	newDecoder func(options.Config, options.Source) (formatio.RecordDecoder, error),
 	path string,
 	sink streamio.DocumentHandler,
 	opts ...streamio.Option,
 ) options.Result {
 	tb.Helper()
 
+	f, err := os.Open(path)
+	if err != nil {
+		tb.Fatalf("open %s: %v", path, err)
+	}
+	defer f.Close()
+	stat, err := f.Stat()
+	if err != nil {
+		tb.Fatalf("stat %s: %v", path, err)
+	}
+
 	cfg := options.New(opts...)
-	dec, err := newDecoder(cfg, path)
+	dec, err := newDecoder(cfg, options.Source{Reader: f, Size: stat.Size(), Name: path})
 	if err != nil {
 		tb.Fatalf("NewDecoder: %v", err)
 	}

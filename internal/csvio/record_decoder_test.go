@@ -14,12 +14,13 @@ import (
 	"testing"
 )
 
-// openRecordDecoder opens a decoder over path and registers its Close.
+// openRecordDecoder opens a decoder over path and registers its Close, along with the underlying
+// file's, since NewDecoder no longer owns opening or closing the file itself.
 //
 //nolint:ireturn // formatio.RecordDecoder is exactly what the constructor under test returns.
 func openRecordDecoder(tb testing.TB, path string, cfg options.Config) formatio.RecordDecoder {
 	tb.Helper()
-	dec, err := csvio.NewDecoder(cfg, path)
+	dec, err := csvio.NewDecoder(cfg, openSource(tb, path))
 	if err != nil {
 		tb.Fatalf("NewDecoder: %v", err)
 	}
@@ -336,15 +337,6 @@ func TestNewDecoder_ContextCancellation(t *testing.T) {
 	batch := make([]record.Record, 8)
 	if _, err := dec.DecodeNext(ctx, batch); !errors.Is(err, context.Canceled) {
 		t.Fatalf("DecodeNext error = %v, want context.Canceled", err)
-	}
-}
-
-// TestNewDecoder_MissingFile checks the constructor surfaces an open failure rather than returning
-// a decoder that fails later.
-func TestNewDecoder_MissingFile(t *testing.T) {
-	_, err := csvio.NewDecoder(newConfig(1, 0, ',', false), t.TempDir()+"/absent.csv")
-	if err == nil {
-		t.Fatal("NewDecoder on a missing file returned no error")
 	}
 }
 

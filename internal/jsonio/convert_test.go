@@ -2,6 +2,7 @@ package jsonio_test
 
 import (
 	"context"
+	"os"
 	"streamio/internal/jsonio"
 	"streamio/internal/options"
 	"streamio/internal/pool"
@@ -18,11 +19,22 @@ func convertFile(
 	sink options.DocumentHandler,
 	cfg options.Config,
 ) (options.Result, error) {
-	src, err := jsonio.NewRawSource(cfg, path)
+	f, err := os.Open(path)
 	if err != nil {
 		return options.Result{}, err
 	}
-	defer src.Close()
+	defer f.Close()
 
-	return pool.RunRaw(ctx, cfg, src, sink)
+	stat, err := f.Stat()
+	if err != nil {
+		return options.Result{}, err
+	}
+
+	raw, err := jsonio.NewRawSource(cfg, options.Source{Reader: f, Size: stat.Size(), Name: path})
+	if err != nil {
+		return options.Result{}, err
+	}
+	defer raw.Close()
+
+	return pool.RunRaw(ctx, cfg, raw, sink)
 }
