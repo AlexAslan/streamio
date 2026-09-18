@@ -310,16 +310,18 @@ work through `processRecords`'s generic loop with no CSV-specific code in either
 | `WithBatchSize(n)` | 512 | Documents per send to a dispatch worker. On the generic path it also sizes the `ReadRows` fetch, and for Parquet *output* it is the number of rows per synthesized Parquet file; ignored by Parquet raw passthrough, which always sends one row group per item. |
 | `WithMaxOpenReaders(n)` | `Workers` | Caps simultaneously-open Parquet row-group readers, for either read route (see above). Ignored by NDJSON. |
 | `WithLogger(l)` | none | Receives a one-line summary (`row/line count, size`) when `ProcessFile` starts. |
-| `WithOnRowError(mode, onSkip)` | `RowErrorFailFast` | `RowErrorSkip` drops a row that fails to decode and continues, instead of failing the whole run. Only takes effect for NDJSON and CSV/TSV field errors on the generic decode/encode path — a CSV/TSV *syntax* error (e.g. an unterminated quoted field) and every Parquet decode error stay fail-fast regardless, since neither leaves the decoder at a well-defined "start of the next row" to resume from. `onSkip`, if non-nil, is called once per dropped row with the error that row raised. |
+| `WithMaxRowErrors(n, onSkip)` | `0` | Caps how many rows may fail to decode and be skipped before the run fails, mirroring BigQuery's load-job `max_bad_records`: `0` (the default) fails immediately on the first row error; a positive `n` skips up to `n` bad rows before failing on the `(n+1)`th. The limit is shared across every decode worker, not per-worker, so it means the same thing regardless of `--workers`. Only takes effect for NDJSON and CSV/TSV field errors on the generic decode/encode path — a CSV/TSV *syntax* error (e.g. an unterminated quoted field) and every Parquet decode error stay fail-fast regardless, since neither leaves the decoder at a well-defined "start of the next row" to resume from. `onSkip`, if non-nil, is called once per skipped row with the error that row raised. Exceeding the limit fails the run with a `*TooManyRowErrorsError` wrapping every row error collected up to and including the one that exceeded it. |
 
-`n <= 0` for any numeric option means "use the default", identical to omitting it. Passing the zero `Format` (or omitting `WithOutputFormat` entirely) means `FormatJSON`.
+`n <= 0` for any numeric option means "use the default", identical to omitting it (for `WithMaxRowErrors` specifically, `n <= 0` means fail-fast, matching BigQuery's own default). Passing the zero `Format` (or omitting `WithOutputFormat` entirely) means `FormatJSON`.
 
 `ProcessFile` returns `streamio.Result{Stats: streamio.Stats{...}}`. `RowsRead` counts logical input
 rows; `DocumentsDispatched` counts successful handler calls. They differ on Parquet's raw path (one
 document is a row group) and whenever an encoder renders a whole batch as one document. `RowsSkipped`
-counts rows `WithOnRowError(RowErrorSkip, ...)` dropped, always zero under the default. `ReadDuration`
-and `DispatchDuration` are summed across every worker, so they can exceed wall-clock time; that's
-expected for a concurrent run and is what makes decode-vs-dispatch time attributable at all.
+counts rows `WithMaxRowErrors` allowed to be skipped, always zero under the default. `Result` is
+still returned alongside the error when the run fails from exceeding the limit, so `RowsSkipped` is
+populated on that path too. `ReadDuration` and `DispatchDuration` are summed across every worker, so
+they can exceed wall-clock time; that's expected for a concurrent run and is what makes
+decode-vs-dispatch time attributable at all.
 
 ### Reading from something other than a file path
 

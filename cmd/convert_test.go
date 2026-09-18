@@ -400,9 +400,9 @@ func TestRunConvert_InvalidCSVDelimiterRejected(t *testing.T) {
 	}
 }
 
-// TestRunConvert_OnRowErrorFailFast checks the default --on-row-error fail stops the whole
-// conversion on a malformed line, rather than writing partial or corrupted output.
-func TestRunConvert_OnRowErrorFailFast(t *testing.T) {
+// TestRunConvert_MaxRowErrorsZeroFailsImmediately checks the default --max-row-errors 0 stops the
+// whole conversion on the first malformed line, rather than writing partial or corrupted output.
+func TestRunConvert_MaxRowErrorsZeroFailsImmediately(t *testing.T) {
 	in := filepath.Join(t.TempDir(), "in.ndjson")
 	if err := os.WriteFile(in, []byte("{\"a\":1}\n{\"a\":}\n{\"a\":3}\n"), 0o600); err != nil {
 		t.Fatalf("write ndjson file: %v", err)
@@ -415,16 +415,16 @@ func TestRunConvert_OnRowErrorFailFast(t *testing.T) {
 	}
 }
 
-// TestRunConvert_OnRowErrorSkip checks --on-row-error skip drops the malformed line and writes
-// every good row to the output.
-func TestRunConvert_OnRowErrorSkip(t *testing.T) {
+// TestRunConvert_MaxRowErrorsAllowsSkipping checks a positive --max-row-errors drops a malformed
+// line under the limit and writes every good row to the output.
+func TestRunConvert_MaxRowErrorsAllowsSkipping(t *testing.T) {
 	in := filepath.Join(t.TempDir(), "in.ndjson")
 	if err := os.WriteFile(in, []byte("{\"a\":1}\n{\"a\":}\n{\"a\":3}\n"), 0o600); err != nil {
 		t.Fatalf("write ndjson file: %v", err)
 	}
 	out := filepath.Join(t.TempDir(), "out.csv")
 
-	flags := convertFlags{in: in, out: out, onRowError: "skip"}
+	flags := convertFlags{in: in, out: out, maxRowErrors: 1}
 	if err := runConvert(context.Background(), flags, "csv"); err != nil {
 		t.Fatalf("runConvert: %v", err)
 	}
@@ -439,19 +439,34 @@ func TestRunConvert_OnRowErrorSkip(t *testing.T) {
 	}
 }
 
-// TestRunConvert_InvalidOnRowErrorRejected checks an unrecognized --on-row-error value fails with
-// an actionable error rather than silently falling back to fail-fast.
-func TestRunConvert_InvalidOnRowErrorRejected(t *testing.T) {
+// TestRunConvert_MaxRowErrorsExceeded checks a positive --max-row-errors still fails the run once
+// the number of malformed rows exceeds it, rather than tolerating an unbounded number of them.
+func TestRunConvert_MaxRowErrorsExceeded(t *testing.T) {
+	in := filepath.Join(t.TempDir(), "in.ndjson")
+	if err := os.WriteFile(in, []byte("{\"a\":}\n{\"a\":}\n{\"a\":3}\n"), 0o600); err != nil {
+		t.Fatalf("write ndjson file: %v", err)
+	}
+	out := filepath.Join(t.TempDir(), "out.csv")
+
+	flags := convertFlags{in: in, out: out, maxRowErrors: 1}
+	if err := runConvert(context.Background(), flags, "csv"); err == nil {
+		t.Fatal("runConvert with 2 malformed lines and --max-row-errors 1 returned no error")
+	}
+}
+
+// TestRunConvert_NegativeMaxRowErrorsRejected checks a negative --max-row-errors fails with an
+// actionable error rather than being silently treated as 0 or unlimited.
+func TestRunConvert_NegativeMaxRowErrorsRejected(t *testing.T) {
 	in := writeNDJSONFixture(t, 5)
 	out := filepath.Join(t.TempDir(), "out.csv")
 
-	flags := convertFlags{in: in, out: out, onRowError: "bogus"}
+	flags := convertFlags{in: in, out: out, maxRowErrors: -1}
 	err := runConvert(context.Background(), flags, "csv")
 	if err == nil {
-		t.Fatal("runConvert succeeded, want an error for an unrecognized --on-row-error value")
+		t.Fatal("runConvert succeeded, want an error for a negative --max-row-errors")
 	}
-	if !strings.Contains(err.Error(), "--on-row-error") {
-		t.Errorf("runConvert error = %v, want one mentioning --on-row-error", err)
+	if !strings.Contains(err.Error(), "--max-row-errors") {
+		t.Errorf("runConvert error = %v, want one mentioning --max-row-errors", err)
 	}
 }
 

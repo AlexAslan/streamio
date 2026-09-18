@@ -2,6 +2,7 @@ package streamio_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -169,14 +170,15 @@ func TestProcessFile_MissingFile(t *testing.T) {
 	}
 }
 
-// TestProcessFile_OnRowErrorFailFast checks the default RowErrorFailFast mode stops the whole run
-// on the first malformed line, exactly as streamio behaved before WithOnRowError existed.
+// TestProcessFile_MaxRowErrorsZeroFailsImmediately checks the default MaxRowErrors of 0 stops the
+// whole run on the first malformed line, exactly as streamio behaved before WithMaxRowErrors
+// existed.
 //
 // Output is forced to CSV, not JSON: NDJSON-to-JSON is a native-format match, which ProcessFile
 // takes as raw passthrough (see ProcessReaderAt's doc) — no record decoder, and so no row-error
-// handling, is ever in play on that path. WithOnRowError only affects the generic decode/encode
+// handling, is ever in play on that path. WithMaxRowErrors only affects the generic decode/encode
 // route, which a genuine format conversion (here, to CSV) actually exercises.
-func TestProcessFile_OnRowErrorFailFast(t *testing.T) {
+func TestProcessFile_MaxRowErrorsZeroFailsImmediately(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "data.ndjson")
 	if err := os.WriteFile(path, []byte("{\"a\":1}\n{\"a\":}\n{\"a\":3}\n"), 0o600); err != nil {
 		t.Fatalf("write ndjson file: %v", err)
@@ -190,17 +192,18 @@ func TestProcessFile_OnRowErrorFailFast(t *testing.T) {
 	// The one row read successfully before the malformed one is still dispatched as its own
 	// document: DecodeNext's contract returns whatever it filled (n) alongside the error, and the
 	// pool encodes+dispatches that partial batch before propagating the error — pre-existing
-	// behavior this option doesn't change, only what RowErrorSkip does differently from it.
+	// behavior this option doesn't change, only what a positive MaxRowErrors does differently.
 	if len(collected()) != 1 {
 		t.Errorf("dispatched %d documents before failing, want 1 (the row read before the bad one)",
 			len(collected()))
 	}
 }
 
-// TestProcessFile_OnRowErrorSkip checks RowErrorSkip drops a malformed line and continues,
-// dispatching every good line, counting the drop in Stats.RowsSkipped, and calling onSkip once.
-// See TestProcessFile_OnRowErrorFailFast's doc for why output is forced to CSV.
-func TestProcessFile_OnRowErrorSkip(t *testing.T) {
+// TestProcessFile_MaxRowErrorsAllowsSkipping checks a positive MaxRowErrors drops a malformed line
+// under the limit and continues, dispatching every good line, counting the drop in
+// Stats.RowsSkipped, and calling onSkip once. See
+// TestProcessFile_MaxRowErrorsZeroFailsImmediately's doc for why output is forced to CSV.
+func TestProcessFile_MaxRowErrorsAllowsSkipping(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "data.ndjson")
 	if err := os.WriteFile(path, []byte("{\"a\":1}\n{\"a\":}\n{\"a\":3}\n"), 0o600); err != nil {
 		t.Fatalf("write ndjson file: %v", err)
@@ -221,7 +224,7 @@ func TestProcessFile_OnRowErrorSkip(t *testing.T) {
 
 	result, err := streamio.ProcessFile(context.Background(), path, sink,
 		streamio.WithOutputFormat(streamio.FormatCSV),
-		streamio.WithOnRowError(streamio.RowErrorSkip, onSkip))
+		streamio.WithMaxRowErrors(1, onSkip))
 	if err != nil {
 		t.Fatalf("ProcessFile: %v", err)
 	}
@@ -240,6 +243,82 @@ func TestProcessFile_OnRowErrorSkip(t *testing.T) {
 	defer mu.Unlock()
 	if !skipDone || len(skipped) != 1 {
 		t.Errorf("onSkip called %d times, want exactly 1", len(skipped))
+	}
+}
+
+// TestProcessFile_MaxRowErrorsExceeded checks the run still fails once the number of malformed
+// lines exceeds a positive MaxRowErrors, and that the returned error unwraps to a
+// *streamio.TooManyRowErrorsError wrapping every collected row error, including the one that
+// exceeded the limit — not just a count.
+func TestProcessFile_MaxRowErrorsExceeded(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "data.ndjson")
+	if err := os.WriteFile(path, []byte("{\"a\":}\n{\"a\":}\n{\"a\":3}\n"), 0o600); err != nil {
+		t.Fatalf("write ndjson file: %v", err)
+	}
+	sink, _ := collectingSink()
+
+	result, err := streamio.ProcessFile(context.Background(), path, sink,
+		streamio.WithOutputFormat(streamio.FormatCSV),
+		streamio.WithMaxRowErrors(1, nil))
+	if err == nil {
+		t.Fatal("ProcessFile with 2 malformed lines and MaxRowErrors 1 returned no error")
+	}
+
+	var tooMany *streamio.TooManyRowErrorsError
+	if !errors.As(err, &tooMany) {
+		t.Fatalf("ProcessFile error = %v, want it to unwrap to *streamio.TooManyRowErrorsError", err)
+	}
+	if tooMany.Limit != 1 {
+		t.Errorf("TooManyRowErrorsError.Limit = %d, want 1", tooMany.Limit)
+	}
+	if len(tooMany.Errors) != 2 {
+		t.Errorf("TooManyRowErrorsError.Errors has %d entries, want 2 (both malformed lines, "+
+			"including the one that exceeded the limit)", len(tooMany.Errors))
+	}
+	if !errors.Is(err, streamio.ErrTooManyRowErrors) {
+		t.Error("ProcessFile error does not match streamio.ErrTooManyRowErrors via errors.Is")
+	}
+	if result.Stats.RowsSkipped != 2 {
+		t.Errorf("Stats.RowsSkipped = %d, want 2 — the row that finally exceeds the limit is still "+
+			"itself skipped and counted, per WithMaxRowErrors' documented contract", result.Stats.RowsSkipped)
+	}
+}
+
+// TestProcessFile_MaxRowErrorsIsGlobalAcrossWorkers checks MaxRowErrors is a single limit shared
+// by every decode worker, not a separate allowance per worker: with --workers 4 and MaxRowErrors 1,
+// malformed rows spread across different workers' chunks must still trip the same shared limit
+// once the total (not any one worker's own count) exceeds it.
+func TestProcessFile_MaxRowErrorsIsGlobalAcrossWorkers(t *testing.T) {
+	const chunkSize = 64
+	// Four chunks, each containing exactly one malformed line among otherwise-valid ones, so with
+	// 4 workers each worker's own chunk sees exactly one bad row — a per-worker limit of 1 would
+	// let every single one through, while a shared limit of 1 must still fail on the second one
+	// encountered across all workers combined.
+	var buf strings.Builder
+	for chunk := range 4 {
+		buf.WriteString(`{"a":}` + "\n")
+		for i := range 3 {
+			fmt.Fprintf(&buf, `{"a":%d}`+"\n", chunk*10+i)
+		}
+	}
+	path := filepath.Join(t.TempDir(), "data.ndjson")
+	if err := os.WriteFile(path, []byte(buf.String()), 0o600); err != nil {
+		t.Fatalf("write ndjson file: %v", err)
+	}
+	sink, _ := collectingSink()
+
+	_, err := streamio.ProcessFile(context.Background(), path, sink,
+		streamio.WithOutputFormat(streamio.FormatCSV),
+		streamio.WithParallelWorkers(4),
+		streamio.WithChunkSize(chunkSize),
+		streamio.WithMaxRowErrors(1, nil))
+	if err == nil {
+		t.Fatal("ProcessFile with 4 malformed lines spread across 4 workers and MaxRowErrors 1 " +
+			"returned no error — the limit must be shared across workers, not per-worker")
+	}
+	var tooMany *streamio.TooManyRowErrorsError
+	if !errors.As(err, &tooMany) {
+		t.Fatalf("ProcessFile error = %v, want it to unwrap to *streamio.TooManyRowErrorsError", err)
 	}
 }
 

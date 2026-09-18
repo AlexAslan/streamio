@@ -10,6 +10,7 @@ import (
 	"context"
 	"io"
 	"streamio/internal/record"
+	"sync"
 	"sync/atomic"
 )
 
@@ -53,7 +54,7 @@ type SplittableRecordDecoder interface {
 // wrapping an I/O or structural error would tell the pool it's safe to retry past when it isn't.
 // NDJSON and CSV/TSV wrap their per-row decode errors this way; Parquet does not, since parquet-go
 // reads and validates a whole row group at once, so its errors have no smaller recoverable unit —
-// WithOnRowError(RowErrorSkip) has no effect there, since no error it returns is ever a RowError.
+// WithMaxRowErrors has no effect there, since no error it returns is ever a RowError.
 type RowError struct {
 	Err error
 }
@@ -61,6 +62,51 @@ type RowError struct {
 func (e *RowError) Error() string { return e.Err.Error() }
 
 func (e *RowError) Unwrap() error { return e.Err }
+
+// RowErrorTracker is the shared, cross-worker state behind WithMaxRowErrors: every decode worker on
+// the generic record path records a skipped row error through the same tracker, so the limit means
+// the same thing regardless of worker count — a per-worker counter would let the real threshold
+// scale with cfg.Run.Workers, which isn't what "max_bad_records"-style semantics promise.
+type RowErrorTracker struct {
+	errs   []error
+	limit  int
+	mu     sync.Mutex
+	broken bool
+}
+
+// NewRowErrorTracker returns a tracker allowing up to limit row errors before Record reports the
+// limit exceeded.
+func NewRowErrorTracker(limit int) *RowErrorTracker {
+	return &RowErrorTracker{limit: limit}
+}
+
+// Record adds err to the tracker, returning false once doing so would exceed the configured
+// limit — the row that tips it over is still recorded, so the caller's returned error (see
+// Errors) includes it, per "report the errors up to that point" including the one that failed.
+// Safe for concurrent use by every decode worker sharing this tracker.
+func (t *RowErrorTracker) Record(err error) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.errs = append(t.errs, err)
+	if len(t.errs) > t.limit {
+		t.broken = true
+	}
+	return !t.broken
+}
+
+// Errors returns every row error recorded so far, in recording order. The caller must not mutate
+// the returned slice.
+func (t *RowErrorTracker) Errors() []error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.errs
+}
+
+// Limit returns the tracker's configured limit.
+func (t *RowErrorTracker) Limit() int {
+	return t.limit
+}
 
 // RecordEncoder renders a decoded batch as however many self-contained documents the format
 // produces from it — one per record for most formats, one per whole batch for a column-oriented
@@ -93,7 +139,7 @@ type DecodeStats struct {
 	// it from dispatch count.
 	Records atomic.Int64
 
-	// RowsSkipped counts rows WithOnRowError(RowErrorSkip, ...) dropped. Always zero under the
-	// default RowErrorFailFast.
+	// RowsSkipped counts rows WithMaxRowErrors allowed to be skipped. Always zero under the
+	// default MaxRowErrors of 0.
 	RowsSkipped atomic.Int64
 }

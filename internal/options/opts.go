@@ -22,9 +22,10 @@ type Config struct {
 	Logger Logger
 	// Transformer changes each decoded record before it is encoded, when set.
 	Transformer Transformer
-	// OnRowError controls what happens when a single row fails to decode. Its zero value is
-	// RowErrorFailFast, matching every version of streamio before this option existed.
-	OnRowError RowErrorPolicy
+	// OnRowErrorSkip, if set, is called once per row MaxRowErrors allows to be skipped, with the
+	// decode error that row raised. It must be safe for concurrent use: one decode worker per
+	// goroutine may call it.
+	OnRowErrorSkip func(err error)
 	// OptionErr is a deferred validation-error slot: an option func that fails validation stores
 	// its error here instead of panicking, and New's caller checks it once after every option has
 	// run.
@@ -41,29 +42,13 @@ type Config struct {
 	Parquet ParquetConfig
 	// CSV holds settings the CSV and TSV formats read; the two differ only in CSV.Delimiter.
 	CSV CSVConfig
-}
-
-// RowErrorMode selects how the decode pool responds to a single row failing to decode.
-type RowErrorMode uint8
-
-const (
-	// RowErrorFailFast stops the whole run on the first row decode error. This is streamio's
-	// original, and still default, behavior.
-	RowErrorFailFast RowErrorMode = iota
-	// RowErrorSkip skips the offending row and continues, for a decoder error that identifies
-	// itself as safely skippable (see formatio.RowError) — currently NDJSON and CSV/TSV field
-	// errors, not Parquet or a CSV/TSV syntax error.
-	RowErrorSkip
-)
-
-// RowErrorPolicy is Config.OnRowError's value: a RowErrorMode plus the optional callback informed
-// of each row RowErrorSkip drops.
-type RowErrorPolicy struct {
-	// OnSkip, if set, is called once per row RowErrorSkip drops, with the decode error that row
-	// raised. It must be safe for concurrent use: one decode worker per goroutine may call it.
-	OnSkip func(err error)
-	// Mode selects fail-fast or skip-and-continue behavior.
-	Mode RowErrorMode
+	// MaxRowErrors caps how many rows may fail to decode and be skipped before the run fails,
+	// mirroring BigQuery's load-job max_bad_records: its zero value means fail immediately on the
+	// first row error, matching every version of streamio before this option existed. Only a
+	// decoder error that identifies itself as safely skippable (see formatio.RowError) counts
+	// against this cap — currently NDJSON and CSV/TSV field errors, not Parquet or a CSV/TSV syntax
+	// error, which always fail the run regardless of MaxRowErrors.
+	MaxRowErrors int
 }
 
 // RunConfig holds settings for the decode/dispatch pool that apply no matter which format is
@@ -179,12 +164,13 @@ func WithLogger(l Logger) Option {
 	}
 }
 
-// WithOnRowError sets how the decode pool responds to a single row failing to decode: mode picks
-// fail-fast (the default) or skip-and-continue, and onSkip, if non-nil, is called once per row
-// RowErrorSkip drops. onSkip is ignored when mode is RowErrorFailFast.
-func WithOnRowError(mode RowErrorMode, onSkip func(err error)) Option {
+// WithMaxRowErrors caps how many rows may fail to decode and be skipped before the run fails,
+// mirroring BigQuery's load-job max_bad_records: n<=0 means fail immediately on the first row
+// error (the default). onSkip, if non-nil, is called once per row skipped under the cap.
+func WithMaxRowErrors(n int, onSkip func(err error)) Option {
 	return func(o *Config) {
-		o.OnRowError = RowErrorPolicy{Mode: mode, OnSkip: onSkip}
+		o.MaxRowErrors = n
+		o.OnRowErrorSkip = onSkip
 	}
 }
 

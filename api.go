@@ -37,16 +37,13 @@ type (
 // TransformRule is a single rename or drop rule built by RenamePath or DropPath.
 type TransformRule = options.PathTransformRule
 
-// RowErrorMode selects how ProcessFile responds to a single row failing to decode.
-type RowErrorMode = options.RowErrorMode
+// ErrTooManyRowErrors is TooManyRowErrorsError's sentinel: check for this failure with errors.Is
+// without depending on the concrete type.
+var ErrTooManyRowErrors = options.ErrTooManyRowErrors
 
-const (
-	// RowErrorFailFast stops the whole run on the first row decode error. This is the default.
-	RowErrorFailFast = options.RowErrorFailFast
-	// RowErrorSkip skips the offending row and continues, for NDJSON and CSV/TSV field errors; it
-	// has no effect on Parquet or a CSV/TSV syntax error, which stay fail-fast regardless.
-	RowErrorSkip = options.RowErrorSkip
-)
+// TooManyRowErrorsError is returned when WithMaxRowErrors' limit is exceeded: it wraps every row
+// error collected up to and including the one that exceeded it.
+type TooManyRowErrorsError = options.TooManyRowErrorsError
 
 // WithInputFormat sets the source file's format explicitly, instead of letting ProcessFile infer
 // it from the file extension.
@@ -128,9 +125,15 @@ func WithTransforms(rules ...TransformRule) Option {
 	return options.WithTransforms(rules...)
 }
 
-// WithOnRowError sets how ProcessFile responds to a single row failing to decode: mode picks
-// fail-fast (the default) or skip-and-continue, and onSkip, if non-nil, is called once per row
-// RowErrorSkip drops. onSkip is ignored when mode is RowErrorFailFast.
-func WithOnRowError(mode RowErrorMode, onSkip func(err error)) Option {
-	return options.WithOnRowError(mode, onSkip)
+// WithMaxRowErrors caps how many rows may fail to decode and be skipped before the run fails,
+// mirroring BigQuery's load-job max_bad_records: n<=0 means fail immediately on the first row
+// error (the default), matching streamio's original behavior. onSkip, if non-nil, is called once
+// per row skipped under the cap. Only NDJSON and CSV/TSV field errors count against the cap — a
+// CSV/TSV syntax error and every Parquet decode error always fail the run regardless of n.
+//
+// Exceeding the cap fails the run with a *TooManyRowErrorsError wrapping every row error collected
+// up to and including the one that exceeded it; Result.Stats.RowsSkipped is still populated on
+// that failure path.
+func WithMaxRowErrors(n int, onSkip func(err error)) Option {
+	return options.WithMaxRowErrors(n, onSkip)
 }
