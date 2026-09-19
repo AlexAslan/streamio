@@ -105,6 +105,13 @@ func TestEncode_Values(t *testing.T) {
 			want: `{"v":{"z":"1","a":"2"}}`,
 		},
 		{name: "empty map renders as an empty object", value: record.Map(nil), want: `{"v":{}}`},
+		{
+			name: "map with a duplicate key preserves both entries rather than erroring",
+			value: record.Map(record.Record{}.
+				Append("a", record.Bytes([]byte("1"))).
+				Append("a", record.Bytes([]byte("2")))),
+			want: `{"v":{"a":"1","a":"2"}}`,
+		},
 	}
 
 	enc := newEncoder(t)

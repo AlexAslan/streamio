@@ -26,6 +26,17 @@ var errUnsupportedKind = errors.New("jsonio: unsupported value kind")
 type encoder struct {
 	enc *jsontext.Encoder
 
+	// opts is set once and reused by every Reset call in encode, rather than a fresh
+	// []jsontext.Options literal per record — encoder.EncodeBatch runs on the decode hot path.
+	//
+	// AllowDuplicateNames is required because writeMap preserves a Parquet Map(String,String)
+	// column's entries verbatim, in source order — Parquet's Map has no uniqueness constraint, so
+	// a row can legitimately carry the same key twice. Without this option jsontext's default RFC
+	// 7493 uniqueness check would turn that into a hard encode error instead of the duplicate
+	// member RFC 8259 itself leaves as unspecified (and that most JSON consumers, including
+	// encoding/json's own map decoding, resolve as last-value-wins).
+	opts []jsontext.Options
+
 	// buf is the render destination, reused across every record so it grows to the widest one once
 	// rather than per record. Each document is copied out of it before being returned.
 	buf bytes.Buffer
@@ -36,7 +47,8 @@ type encoder struct {
 //
 //nolint:ireturn // formatio.RecordEncoder is the constructor type streamio's format registry stores.
 func NewEncoder(_ options.Config) (formatio.RecordEncoder, error) {
-	return &encoder{enc: jsontext.NewEncoder(io.Discard, jsontext.EscapeForHTML(true))}, nil
+	opts := []jsontext.Options{jsontext.EscapeForHTML(true), jsontext.AllowDuplicateNames(true)}
+	return &encoder{enc: jsontext.NewEncoder(io.Discard, opts...), opts: opts}, nil
 }
 
 // EncodeBatch renders every record in batch as its own JSON document, one []byte per record.
@@ -62,7 +74,7 @@ func (e *encoder) EncodeBatch(batch []record.Record) ([][]byte, error) {
 
 // encode renders rec into the encoder's buffer as a single-line JSON object.
 func (e *encoder) encode(rec record.Record) error {
-	e.enc.Reset(&e.buf, jsontext.EscapeForHTML(true))
+	e.enc.Reset(&e.buf, e.opts...)
 
 	if err := e.enc.WriteToken(jsontext.BeginObject); err != nil {
 		return err
