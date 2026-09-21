@@ -27,3 +27,8 @@ require (
 	golang.org/x/sys v0.47.0 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 )
+
+// Pinned to a fork commit fixing RLE column-encoding derivation and L3
+// reencode row-alignment (upstream parquet-go/parquet-go#603); not yet
+// merged/released upstream.
+replace github.com/parquet-go/parquet-go => github.com/AlexAslan/parquet-go v0.0.0-20260921075746-61228f8cb465
