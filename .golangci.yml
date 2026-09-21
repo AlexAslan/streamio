@@ -109,6 +109,9 @@ linters:
           paramsOnly: false
         underef:
           skipRecvDeref: false
+    gomoddirectives:
+      replace-allow-list:
+        - github.com/parquet-go/parquet-go
     govet:
       enable-all: true
       settings:
