@@ -305,6 +305,50 @@ func assertMapValue(tb testing.TB, v record.Value, want map[string]string, wantS
 	}
 }
 
+// TestNewDecoder_MapColumns_DistinctPerRowInOneBatch pins a real regression: every row in a batch
+// used to share one mutable Map scratch buffer per field, reset and reused for every row in the
+// same readOpenRowGroup loop before the caller ever saw any of them. Since the returned Record
+// embeds that buffer by reference, a later row's Append silently overwrote an earlier row's
+// already-returned map in place — every row ended up holding some interleaving of whichever rows
+// happened to share its batch, not its own data. Here, three rows with distinct attribute maps are
+// decoded in a single batch (batchSize > row count, so all three build before any is read back)
+// and each must still hold exactly its own entries, not another row's or a mix.
+func TestNewDecoder_MapColumns_DistinctPerRowInOneBatch(t *testing.T) {
+	rows := []testRowWithMap{
+		{Name: "row-a", Attributes: map[string]string{"service.name": "cart", "region": "eu"}},
+		{Name: "row-b", Attributes: map[string]string{"service.name": "email"}},
+		{Name: "row-c", Attributes: map[string]string{"service.name": "frontend", "zone": "a", "tier": "web"}},
+	}
+
+	path := filepath.Join(t.TempDir(), "maps.parquet")
+	writeParquetRows(t, path, rows)
+
+	// batchSize (8) comfortably exceeds len(rows) (3), so DecodeNext must fill every row's record
+	// before mustDrain reads any of them back — exactly the window the bug corrupted.
+	dec, err := parquetio.NewDecoder(newConfig(8, 1), openSource(t, path))
+	if err != nil {
+		t.Fatalf("NewDecoder: %v", err)
+	}
+	defer func() {
+		if cerr := dec.Close(); cerr != nil {
+			t.Errorf("Close: %v", cerr)
+		}
+	}()
+
+	decoded := mustDrain(t, dec, 8)
+	if len(decoded) != len(rows) {
+		t.Fatalf("decoded %d rows, want %d", len(decoded), len(rows))
+	}
+
+	for i, want := range rows {
+		v, ok := decoded[i]["attributes"]
+		if !ok {
+			t.Fatalf("row %d (%s): attributes missing", i, want.Name)
+		}
+		assertMapValue(t, v, want.Attributes, len(want.Attributes))
+	}
+}
+
 // TestNewDecoder_NullScalar checks an absent optional value decodes as a null Value rather than as
 // a zero-valued one, which would be indistinguishable from a real zero downstream.
 func TestNewDecoder_NullScalar(t *testing.T) {

@@ -27,8 +27,12 @@ type recordDecoder struct {
 	mapKeys map[string][]string
 	mapVals map[string][][]byte
 
-	// mapEntries holds the nested Record per map column, reused across rows like the outer batch.
-	mapEntries map[string]record.Record
+	// mapEntries holds the nested Record per map column, one slot per row position in the current
+	// batch (sized to s.batchSize) rather than one shared buffer reused on every row: like rows
+	// (below), a slot is embedded by reference into the record returned for that row position and
+	// must survive until the caller is done with the whole batch, so it can only be reset and
+	// reused starting the next DecodeNext call — never again within the same batch-fill loop.
+	mapEntries map[string][]record.Record
 
 	// rows is the ReadRows landing buffer. Its Values are only released at the start of the next
 	// DecodeNext, since the records handed to the caller reference the pages behind them.
@@ -66,7 +70,10 @@ func (s *sharedState) newRecordDecoder() *recordDecoder {
 	if len(s.mapOrder) > 0 {
 		d.mapKeys = make(map[string][]string, len(s.mapOrder))
 		d.mapVals = make(map[string][][]byte, len(s.mapOrder))
-		d.mapEntries = make(map[string]record.Record, len(s.mapOrder))
+		d.mapEntries = make(map[string][]record.Record, len(s.mapOrder))
+		for _, field := range s.mapOrder {
+			d.mapEntries[field] = make([]record.Record, s.batchSize)
+		}
 	}
 
 	return d
@@ -153,7 +160,7 @@ func (d *recordDecoder) readOpenRowGroup(batch []record.Record) (int, error) {
 	d.held = n
 
 	for i := range d.rows[:n] {
-		batch[i] = d.buildRecord(batch[i], d.rows[i])
+		batch[i] = d.buildRecord(batch[i], d.rows[i], i)
 	}
 
 	if errors.Is(readErr, io.EOF) {
@@ -211,8 +218,10 @@ func (d *recordDecoder) closeRowGroup() {
 // from the schema — format decoders keep source field names intact, and caller-specific
 // rename/drop policy belongs in a configured record transformer instead — and map ordering goes
 // through the schema-derived mapOrder, so the field set a record carries depends only on the
-// file's schema and never on a given row's values.
-func (d *recordDecoder) buildRecord(rec record.Record, row parquetgo.Row) record.Record {
+// file's schema and never on a given row's values. slot is row's position within the current
+// batch, threaded through to appendMapFields so each row's Map field gets its own scratch buffer
+// rather than one shared across every row in the batch; see mapEntries' doc.
+func (d *recordDecoder) buildRecord(rec record.Record, row parquetgo.Row, slot int) record.Record {
 	rec = rec.Reset()
 	d.resetMapScratch()
 
@@ -236,7 +245,7 @@ func (d *recordDecoder) buildRecord(rec record.Record, row parquetgo.Row) record
 		return true
 	})
 
-	return d.appendMapFields(rec)
+	return d.appendMapFields(rec, slot)
 }
 
 // resetMapScratch truncates each map column's scratch to zero length rather than clearing the
@@ -267,8 +276,12 @@ func (d *recordDecoder) collectMapLeaf(field, leaf string, columnValues []parque
 
 // appendMapFields appends one KindMap field per non-empty map column, in mapOrder. A key with no
 // corresponding value is dropped rather than reconstructed, and an empty map omits its field
-// entirely rather than carrying an empty object nothing was stored in.
-func (d *recordDecoder) appendMapFields(rec record.Record) record.Record {
+// entirely rather than carrying an empty object nothing was stored in. slot selects this row's own
+// scratch buffer per field (see mapEntries' doc) — critical, not just an optimization: the
+// returned rec embeds entries by reference, and every row in the batch is built before the caller
+// reads any of them, so reusing one buffer across rows here would let a later row's Append
+// silently overwrite an earlier row's already-returned Map value in place.
+func (d *recordDecoder) appendMapFields(rec record.Record, slot int) record.Record {
 	for _, field := range d.s.mapOrder {
 		keys := d.mapKeys[field]
 		if len(keys) == 0 {
@@ -276,14 +289,14 @@ func (d *recordDecoder) appendMapFields(rec record.Record) record.Record {
 		}
 
 		vals := d.mapVals[field]
-		entries := d.mapEntries[field].Reset()
+		entries := d.mapEntries[field][slot].Reset()
 		for i, k := range keys {
 			if i >= len(vals) {
 				break
 			}
 			entries = entries.Append(k, record.Bytes(vals[i]))
 		}
-		d.mapEntries[field] = entries
+		d.mapEntries[field][slot] = entries
 
 		rec = rec.Append(field, record.Map(entries))
 	}
