@@ -30,3 +30,6 @@ go.work.sum
 # Editor/IDE
 .idea/
 .vscode/
+
+# Generated at release time (scripts/third-party-notices.sh)
+THIRD_PARTY_NOTICES.md

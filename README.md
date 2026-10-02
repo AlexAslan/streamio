@@ -70,5 +70,5 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Security issues: [SECURITY.md](SECURITY.
 
 ## License
 
-[MIT](LICENSE). Third-party dependency licenses are listed in
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+[MIT](LICENSE). Release archives also include `THIRD_PARTY_NOTICES.md` with the licenses of
+bundled dependencies.
