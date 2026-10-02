@@ -1,5 +1,9 @@
 # streamio
 
+[![CI](https://github.com/AlexAslan/streamio/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/AlexAslan/streamio/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/AlexAslan/streamio.svg)](https://pkg.go.dev/github.com/AlexAslan/streamio)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 A Go library and CLI for converting between NDJSON, Parquet, CSV, TSV, and Arrow IPC at scale, built
 for pipelines that move large datasets between storage and processing systems rather than one-off
 scripting. Any format can be read and written, decoding and dispatch run concurrently on a shared
