@@ -27,3 +27,5 @@ require (
 	golang.org/x/sys v0.47.0 // indirect
 	google.golang.org/protobuf v1.36.12 // indirect
 )
+
+retract [v0.0.1, v0.0.5] // Pre-public development versions: Apache-2.0 licensed and built with a replace directive; use v0.0.6 or later.
