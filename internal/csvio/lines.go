@@ -58,7 +58,7 @@ func (s *sharedState) openChunk(chunkIdx, chunkStart int64) (*chunkLines, error)
 // next returns this chunk's next physical line, including its original line ending exactly as read
 // (so the raw-passthrough contract of reproducing the input's own bytes actually holds when
 // dispatched lines are concatenated back to back with no separator of their own — see
-// cmd/writer.go's fileWriter), or io.EOF once the chunk is done. A blank line is a real line and is
+// cmd/streamio/writer.go's fileWriter), or io.EOF once the chunk is done. A blank line is a real line and is
 // returned as-is, not skipped: dropping it would itself be a loss of the original bytes. The
 // returned slice is freshly allocated per line by bufio and is the caller's.
 func (c *chunkLines) next() ([]byte, error) {

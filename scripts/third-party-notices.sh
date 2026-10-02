@@ -12,7 +12,7 @@ out="${1:-THIRD_PARTY_NOTICES.md}"
   echo
 } > "$out"
 
-go list -deps -f '{{if not .Standard}}{{with .Module}}{{.Path}} {{.Version}} {{.Dir}}{{end}}{{end}}' ./cmd |
+go list -deps -f '{{if not .Standard}}{{with .Module}}{{.Path}} {{.Version}} {{.Dir}}{{end}}{{end}}' ./cmd/streamio |
   sort -u | grep -v '^github.com/AlexAslan/streamio ' |
   while read -r path version dir; do
     lic=$(find "$dir" -maxdepth 1 -iname 'licen[sc]e*' -o -maxdepth 1 -iname 'copying*' | head -1)

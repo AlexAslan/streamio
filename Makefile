@@ -22,7 +22,7 @@ help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-20s : %s\n", $$1, $$2}'
 
 build: ## Build the streamio CLI for the host OS/arch.
-	go build -o build/streamio ./cmd
+	go build -o build/streamio ./cmd/streamio
 
 test: ## Run unit tests.
 	go test -v `go list $(PKG)` -race -covermode=atomic -count=1 -shuffle=on -timeout $(DEFAULT_TESTS_TIMEOUT)
@@ -48,4 +48,4 @@ notices: ## Generate THIRD_PARTY_NOTICES.md (done automatically on release).
 	scripts/third-party-notices.sh
 
 licenses-check: ## Fail if any dependency uses a non-permissive license.
-	go run github.com/google/go-licenses/v2@$(GO_LICENSES_VERSION) check ./cmd --allowed_licenses=MIT,BSD-3-Clause,BSD-2-Clause,Apache-2.0,ISC 2>&1 | grep -vE 'non-Go code|\.(s|h)$$' ; test $${PIPESTATUS[0]} -eq 0
+	go run github.com/google/go-licenses/v2@$(GO_LICENSES_VERSION) check ./cmd/streamio --allowed_licenses=MIT,BSD-3-Clause,BSD-2-Clause,Apache-2.0,ISC 2>&1 | grep -vE 'non-Go code|\.(s|h)$$' ; test $${PIPESTATUS[0]} -eq 0

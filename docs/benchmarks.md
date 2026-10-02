@@ -10,8 +10,8 @@ Measured on Apple M3 Max, `GOMAXPROCS=16`. Rerun before using for capacity plann
 | `BenchmarkEncoder_BatchVsStreaming` | `internal/parquetio/encoder_bench_test.go` | Whether the CLI's single-continuous-file Parquet output (`streamingEncoder`) costs anything over the library's default one-file-per-batch encoder. |
 | `BenchmarkStreamingEncoder_MemoryBoundedness` | `internal/parquetio/encoder_bench_test.go` | Whether streaming output's per-flush memory actually stays bounded as total output size grows. |
 | `BenchmarkTransformRecord_RenameAndDrop` | `internal/options/transform_bench_test.go` | Per-record cost of `WithTransforms`' rename/drop hook, across record widths. |
-| `BenchmarkRunConvert` | `cmd/convert_bench_test.go` | CLI end-to-end throughput, all 5×5 = 25 in→out pairs, 20,000 rows. |
-| `BenchmarkRunConvert_LargeScale` | `cmd/convert_bench_test.go` | Same 25 pairs, 10,000,000 rows. Not run by default. |
+| `BenchmarkRunConvert` | `cmd/streamio/convert_bench_test.go` | CLI end-to-end throughput, all 5×5 = 25 in→out pairs, 20,000 rows. |
+| `BenchmarkRunConvert_LargeScale` | `cmd/streamio/convert_bench_test.go` | Same 25 pairs, 10,000,000 rows. Not run by default. |
 
 ## Batch-per-file vs. single continuous file (Parquet output)
 
@@ -59,7 +59,7 @@ go test ./internal/options/... -bench=BenchmarkTransformRecord_RenameAndDrop -be
 ## CLI end-to-end
 
 ```
-go test ./cmd/... -bench=BenchmarkRunConvert -benchmem -run '^$'
+go test ./cmd/streamio/... -bench=BenchmarkRunConvert -benchmem -run '^$'
 ```
 
 **20,000 rows:**
@@ -93,7 +93,7 @@ go test ./cmd/... -bench=BenchmarkRunConvert -benchmem -run '^$'
 | arrow→arrow | 125.7 | 2,919,816 | 24,522 |
 
 **10,000,000 rows** (`BenchmarkRunConvert_LargeScale`, not run by default —
-`go test ./cmd/... -bench=BenchmarkRunConvert_LargeScale -benchmem -run '^$' -timeout=30m`):
+`go test ./cmd/streamio/... -bench=BenchmarkRunConvert_LargeScale -benchmem -run '^$' -timeout=30m`):
 
 | in → out | ns/row | B/op | allocs/op |
 |---|---|---|---|

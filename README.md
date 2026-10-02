@@ -23,7 +23,7 @@ platform, extract it, and put the `streamio` binary on your `PATH`.
 To build from source instead:
 
 ```
-go install github.com/AlexAslan/streamio/cmd@latest
+go install github.com/AlexAslan/streamio/cmd/streamio@latest
 ```
 
 ## Getting started

@@ -3,7 +3,7 @@
 ## What this is
 
 `streamio` is a Go library (module `streamio`, Go 1.27) that reads NDJSON and Parquet files and
-pushes documents to a caller-provided handler, with an accompanying CLI (`cmd/`) for format
+pushes documents to a caller-provided handler, with an accompanying CLI (`cmd/streamio/`) for format
 conversion. See `README.md` for a detailed architecture writeup (raw-passthrough vs. generic
 record path, the decode/dispatch worker pool, NDJSON chunking, Parquet row groups) before making
 non-trivial changes — it documents *why* the code is shaped the way it is, not just what it does.
@@ -18,12 +18,12 @@ non-trivial changes — it documents *why* the code is shaped the way it is, not
 - `internal/record` — canonical format-neutral row type (`Record`, `Field`, `Value`).
 - `internal/formatio` — the generic cross-format seam (`RecordDecoder`/`RecordEncoder` interfaces).
 - `internal/options` — functional options, config, transforms.
-- `cmd/` — the `streamio` CLI (cobra-based).
+- `cmd/streamio/` — the `streamio` CLI (cobra-based).
 
 ## Build / test / lint
 
 ```bash
-make build              # go build -o build/streamio ./cmd
+make build              # go build -o build/streamio ./cmd/streamio
 make test               # go test -race -covermode=atomic -shuffle=on ./...
 make lint                # golangci-lint run
 make lint-fix            # golangci-lint run --fix

@@ -7,7 +7,7 @@ before:
 
 builds:
   - id: streamio
-    main: ./cmd
+    main: ./cmd/streamio
     binary: streamio
     env:
       - CGO_ENABLED=0
