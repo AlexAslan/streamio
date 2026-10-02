@@ -5,8 +5,8 @@ import (
 	"errors"
 	"io"
 
-	parquetgo "github.com/parquet-go/parquet-go"
-	"github.com/parquet-go/parquet-go/format"
+	parquetgo "github.com/AlexAslan/parquet-go"
+	"github.com/AlexAslan/parquet-go/format"
 
 	"github.com/AlexAslan/streamio/internal/formatio"
 	"github.com/AlexAslan/streamio/internal/options"

@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	parquetgo "github.com/parquet-go/parquet-go"
+	parquetgo "github.com/AlexAslan/parquet-go"
 
 	"github.com/AlexAslan/streamio/internal/options"
 	"github.com/AlexAslan/streamio/internal/parquetio"
