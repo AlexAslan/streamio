@@ -26,6 +26,9 @@ builds:
 archives:
   - id: streamio
     formats: [tar.gz]
+    files:
+      - LICENSE
+      - THIRD_PARTY_NOTICES.md
     format_overrides:
       - goos: windows
         formats: [zip]
