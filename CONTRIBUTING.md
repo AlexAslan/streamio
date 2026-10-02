@@ -36,7 +36,7 @@ Run `make fmt lint test` before opening a PR; CI runs the same checks.
 
 ## Pull requests
 
-1. Fork and branch from `master`.
+1. Fork and branch from `main`.
 2. Keep PRs focused; one logical change each.
 3. Fill in the PR template and make sure CI is green.
 4. A maintainer will review; please be patient and responsive to feedback.
