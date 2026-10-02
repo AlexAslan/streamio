@@ -4,7 +4,7 @@
 streamio/
 ├── api.go                public types/options: Format, Result, Stats, DocumentHandler, transforms
 ├── streamio.go    ProcessFile: compares requested vs. native format, picks a route
-├── cmd/                  standalone `streamio convert` CLI, its own `package main`; drives
+├── cmd/streamio/         standalone `streamio convert` CLI, its own `package main`; drives
 │                         ProcessFile directly through the public api.go surface
 └── internal/
     ├── options/

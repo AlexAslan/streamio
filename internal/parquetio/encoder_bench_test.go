@@ -51,7 +51,7 @@ func newStreamingEncoderForBench(b *testing.B) formatio.FinalizableRecordEncoder
 // comparison rather than whatever concurrency the default encoder could otherwise use.
 //
 // The question this answers: does choosing single continuous-file output (the CLI's default for
-// Parquet — see cmd/convert.go) cost anything over the existing default per-batch-file behavior.
+// Parquet — see cmd/streamio/convert.go) cost anything over the existing default per-batch-file behavior.
 func BenchmarkEncoder_BatchVsStreaming(b *testing.B) {
 	batchSizes := []int{100, 1_000, 10_000}
 
