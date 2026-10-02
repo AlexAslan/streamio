@@ -15,7 +15,7 @@ GIT_REMOTE ?= $(shell git remote | grep -x upstream || git remote | grep -x orig
 BASE_BRANCH ?= $(shell git remote show $(GIT_REMOTE) 2>/dev/null | sed -n '/HEAD branch/s/.*: //p')
 BASE_REF ?= $(if $(BASE_BRANCH),$(GIT_REMOTE)/$(BASE_BRANCH),upstream/main)
 
-.PHONY: help build test fmt lint lint-fix lint-new-issues deps-setup-lint
+.PHONY: help build test fmt lint lint-fix lint-new-issues deps-setup-lint notices licenses-check
 
 help:
 	@echo "Available commands:"
@@ -43,3 +43,9 @@ lint-new-issues: ## Run linters checking only for new issues introduced compared
 
 fmt: ## Format Go code.
 	$(GOPATH_BIN)/golangci-lint fmt
+
+notices: ## Generate THIRD_PARTY_NOTICES.md (done automatically on release).
+	scripts/third-party-notices.sh
+
+licenses-check: ## Fail if any dependency uses a non-permissive license.
+	go run github.com/google/go-licenses/v2@$(GO_LICENSES_VERSION) check ./cmd --allowed_licenses=MIT,BSD-3-Clause,BSD-2-Clause,Apache-2.0,ISC 2>&1 | grep -vE 'non-Go code|\.(s|h)$$' ; test $${PIPESTATUS[0]} -eq 0

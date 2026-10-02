@@ -63,3 +63,12 @@ See [Configuration](docs/configuration.md) for the full `streamio.Option` refere
 - [Configuration](docs/configuration.md) — `streamio.Option` reference and non-file-path input.
 - [Benchmarks](docs/benchmarks.md) — measured throughput and memory across every format pair.
 - [Package layout](docs/package-layout.md) — where everything lives.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Security issues: [SECURITY.md](SECURITY.md).
+
+## License
+
+[MIT](LICENSE). Release archives also include `THIRD_PARTY_NOTICES.md` with the licenses of
+bundled dependencies.

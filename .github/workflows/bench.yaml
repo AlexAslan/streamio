@@ -2,7 +2,7 @@ name: Benchmark
 
 on:
   pull_request:
-    branches: [master]
+    branches: [main]
 
 permissions:
   contents: read
@@ -27,7 +27,7 @@ jobs:
           go-version-file: go.mod
 
       - name: Install benchstat
-        run: go install golang.org/x/perf/cmd/benchstat@latest
+        run: go install golang.org/x/perf/cmd/benchstat@406019bb8b68
 
       # Excludes any benchmark named *_LargeScale by convention: those are opt-in-only
       # (see BenchmarkRunConvert_LargeScale's doc comment), too slow to run twice per PR here.
