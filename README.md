@@ -59,6 +59,8 @@ frequent values:
 for every flag, including CSV/TSV delimiter and header options, batch/worker sizing, and
 `--max-row-errors`.
 
+For many more worked examples (formats, detection, every compression codec, `stats`, bad rows, and the Go API), see [docs/examples.md](docs/examples.md).
+
 Custom row filters, record transforms and record-level passes are available as an experimental
 library API: see [docs/stages.md](docs/stages.md).
 
