@@ -18,10 +18,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # Pinned below the latest 1.27.x patch: Go 1.27.2's export data is a newer format than the
+      # newest golangci-lint release (built with Go 1.27.0) can read, so typechecking every package
+      # fails. Unpin once golangci-lint ships a build with Go >= 1.27.2.
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: go.mod
+          go-version: "1.27.1"
 
       - name: Install golangci-lint
         run: make deps-setup-lint
