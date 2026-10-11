@@ -9,6 +9,8 @@ import (
 
 // SamplingSpec describes which records a run keeps. Set exactly one of Rate, RangeHi, or
 // StratifyBy; the choice is a pure function of Seed and the record's key.
+//
+//nolint:govet // Fields are grouped by meaning, with their docs, rather than packed by size.
 type SamplingSpec struct {
 	// StratumRates gives each StratifyBy value its own keep rate; values not listed use
 	// DefaultRate.
@@ -31,7 +33,30 @@ type SamplingSpec struct {
 	RangeLo, RangeHi float64
 	// DefaultRate is the keep rate in strata mode for values not in StratumRates.
 	DefaultRate float64
+	// OnMissingKey says what happens to a record with no value for any of its Key columns. The
+	// default, MissingKeyRow, samples it independently by its whole content; hashing the missing
+	// key would give every such record one hash and keep or drop them all together.
+	OnMissingKey MissingKeyPolicy
 }
+
+// MissingKeyPolicy says what happens to a record with no value for any of its sampling key
+// columns.
+type MissingKeyPolicy = sample.MissingKeyPolicy
+
+const (
+	// MissingKeyRow samples the record independently, by hashing its whole content. This is the
+	// default.
+	MissingKeyRow = sample.MissingKeyRow
+	// MissingKeyKeep keeps the record, outside the sample's rate.
+	MissingKeyKeep = sample.MissingKeyKeep
+	// MissingKeyDrop drops the record.
+	MissingKeyDrop = sample.MissingKeyDrop
+	// MissingKeyError fails the run, for pipelines that require every record to be keyed.
+	MissingKeyError = sample.MissingKeyError
+)
+
+// ErrMissingKey is returned under MissingKeyError for a record with no value for its key columns.
+var ErrMissingKey = sample.ErrMissingKey
 
 // WithSampling keeps a deterministic subset of the input's records.
 //
@@ -62,6 +87,7 @@ func (s SamplingSpec) internal() sample.Spec {
 		RangeLo:      s.RangeLo,
 		RangeHi:      s.RangeHi,
 		DefaultRate:  s.DefaultRate,
+		OnMissingKey: s.OnMissingKey,
 		HasRate:      s.Rate > 0,
 		HasRange:     s.RangeHi > 0,
 		HasStrata:    s.StratifyBy != "",

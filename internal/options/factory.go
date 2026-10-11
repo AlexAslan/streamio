@@ -102,6 +102,9 @@ type Stats struct {
 	// UnseenColumns lists the columns a WithWhere expression compares that no record had, which is
 	// usually a typo. It is empty when no rows were read.
 	UnseenColumns []string
+	// RowsMissingKey is how many records had no value for any sampling key column. They are handled
+	// by the sampling option's missing-key policy.
+	RowsMissingKey int64
 	// DocumentsDispatched is how many documents were handed to the caller's handler. It can differ
 	// from RowsRead when an encoder renders a whole batch as one document (Parquet) rather than one
 	// document per row (NDJSON).

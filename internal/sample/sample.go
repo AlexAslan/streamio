@@ -23,7 +23,27 @@ import (
 // DefaultWeightColumn is the column name the CLI writes weights to.
 const DefaultWeightColumn = "_sample_weight"
 
+// MissingKeyPolicy says what happens to a record that has no value for any of its key columns.
+//
+// Hashing the key of such records would give them all one hash, so they would be kept or dropped
+// together, which can swing a sample by thousands of rows.
+type MissingKeyPolicy string
+
+const (
+	// MissingKeyRow samples the record independently, by hashing its whole content. It is the
+	// default: a record with no key has nothing to join on, so independence costs nothing.
+	MissingKeyRow MissingKeyPolicy = "row"
+	// MissingKeyKeep keeps the record, outside the sample's rate.
+	MissingKeyKeep MissingKeyPolicy = "keep"
+	// MissingKeyDrop drops the record.
+	MissingKeyDrop MissingKeyPolicy = "drop"
+	// MissingKeyError fails the run, for pipelines that require every record to be keyed.
+	MissingKeyError MissingKeyPolicy = "error"
+)
+
 // Spec describes a sampling run. Exactly one mode applies: Rate, Range, or Strata.
+//
+//nolint:govet // Fields are grouped by meaning, with their docs, rather than packed by size.
 type Spec struct {
 	// StratumRates gives each stratum value its own keep rate; values not listed use DefaultRate.
 	StratumRates map[string]float64
@@ -45,6 +65,9 @@ type Spec struct {
 	RangeLo, RangeHi float64
 	// DefaultRate is strata mode's rate for values not in StratumRates.
 	DefaultRate float64
+	// OnMissingKey says what happens to a record whose key columns are all missing, null or empty.
+	// The zero value is MissingKeyRow.
+	OnMissingKey MissingKeyPolicy
 	// HasRate, HasRange and HasStrata say which mode is selected, so a zero rate or range is an
 	// error instead of being mistaken for "unset".
 	HasRate, HasRange, HasStrata bool
@@ -58,6 +81,9 @@ var (
 	errNoStratifyBy = errors.New("strata sampling needs a column to stratify by")
 	errNoStrata     = errors.New("strata sampling needs stratum rates or a default rate")
 	errKeyWithEmpty = errors.New("sampling key has an empty column name")
+	errBadPolicy    = errors.New("unknown missing-key policy: want row, keep, drop, or error")
+	// ErrMissingKey is returned under MissingKeyError for a record with no value for its key.
+	ErrMissingKey = errors.New("sampling key is missing")
 )
 
 // Validate reports a problem that would make the spec ambiguous or unusable.
@@ -79,6 +105,11 @@ func (s Spec) Validate() error {
 		if k == "" {
 			return errKeyWithEmpty
 		}
+	}
+	switch s.OnMissingKey {
+	case "", MissingKeyRow, MissingKeyKeep, MissingKeyDrop, MissingKeyError:
+	default:
+		return fmt.Errorf("%w: got %q", errBadPolicy, string(s.OnMissingKey))
 	}
 
 	switch {
@@ -162,8 +193,10 @@ type compiled struct {
 	strata       map[string]threshold
 	weights      map[string]float64
 	weightCol    string
+	onMissing    MissingKeyPolicy
 	stratifyPath []string
 	keyPaths     [][]string
+	keyNames     []string
 	hi           threshold
 	rate         threshold
 	lo           threshold
@@ -199,9 +232,13 @@ func compile(s Spec) (*compiled, error) {
 		return nil, err
 	}
 
-	c := &compiled{seed: seedOf(s.Seed), weightCol: s.WeightColumn}
+	c := &compiled{seed: seedOf(s.Seed), weightCol: s.WeightColumn, onMissing: s.OnMissingKey}
+	if c.onMissing == "" {
+		c.onMissing = MissingKeyRow
+	}
 	for _, k := range s.Key {
 		c.keyPaths = append(c.keyPaths, strings.Split(k, "."))
+		c.keyNames = append(c.keyNames, k)
 	}
 	switch {
 	case s.HasRate:
@@ -251,11 +288,30 @@ func Option(s Spec) (options.Option, error) {
 type filter struct {
 	c       *compiled
 	scratch []byte
+	// missing counts records that had no value for any key column.
+	missing int64
 }
+
+// MissingKeys reports how many records had no value for any of their key columns, so the run's
+// Stats can surface a key that is not always present.
+func (f *filter) MissingKeys() int64 { return f.missing }
 
 // Keep reports whether rec is in the sample.
 func (f *filter) Keep(rec record.Record) (bool, error) {
-	h := f.hash(rec)
+	h, missing := f.hashOf(rec)
+	if missing {
+		f.missing++
+		switch f.c.onMissing {
+		case MissingKeyKeep:
+			return true, nil
+		case MissingKeyDrop:
+			return false, nil
+		case MissingKeyError:
+			return false, fmt.Errorf("%w: every key column is empty (%s)", ErrMissingKey, strings.Join(f.c.keyNames, ", "))
+		case MissingKeyRow:
+			h = f.rowHash(rec)
+		}
+	}
 	switch f.c.mode {
 	case modeRate:
 		return f.c.rate.keeps(h), nil
@@ -266,6 +322,25 @@ func (f *filter) Keep(rec record.Record) (bool, error) {
 		return t.keeps(h), nil
 	}
 	return false, nil
+}
+
+// keyMissing reports whether a keyed run's record has no value for any key column.
+func (c *compiled) keyMissing(rec record.Record, scratch *[]byte) bool {
+	if len(c.keyPaths) == 0 {
+		return false
+	}
+	for _, path := range c.keyPaths {
+		v, ok := lookupPath(rec, path)
+		if !ok {
+			continue
+		}
+		var text bool
+		*scratch, text = v.AppendText((*scratch)[:0])
+		if text {
+			return false
+		}
+	}
+	return true
 }
 
 // stratumThreshold returns the keep threshold and weight for rec's stratum.
@@ -315,18 +390,21 @@ const (
 	sepMissing = 0x00
 )
 
-// hash returns the record's 64-bit sampling hash.
-func (f *filter) hash(rec record.Record) uint64 {
+// hashOf returns the record's 64-bit sampling hash. missing is true when the record has a key
+// configured but none of its key columns holds a value; the hash is then of no use for keying.
+func (f *filter) hashOf(rec record.Record) (uint64, bool) {
 	if len(f.c.keyPaths) > 0 {
 		return f.keyHash(rec)
 	}
-	return f.rowHash(rec)
+	return f.rowHash(rec), false
 }
 
-// keyHash hashes the configured key columns' text, in the configured order. A missing, null or
-// empty column hashes the same way, which keeps formats with and without nulls aligned.
-func (f *filter) keyHash(rec record.Record) uint64 {
+// keyHash hashes the configured key columns' text, in the configured order. A column that is
+// missing, null or empty contributes a marker, so a record with only some of its key columns is
+// still keyed by the rest. missing is true when every key column was empty.
+func (f *filter) keyHash(rec record.Record) (uint64, bool) {
 	buf := f.scratch[:0]
+	present := false
 	for _, path := range f.c.keyPaths {
 		buf = append(buf, sepField)
 		v, ok := lookupPath(rec, path)
@@ -336,12 +414,14 @@ func (f *filter) keyHash(rec record.Record) uint64 {
 		}
 		var text bool
 		buf, text = v.AppendText(buf)
-		if !text {
+		if text {
+			present = true
+		} else {
 			buf = append(buf, sepMissing)
 		}
 	}
 	f.scratch = buf
-	return xxh3.HashSeed(buf, f.c.seed)
+	return xxh3.HashSeed(buf, f.c.seed), !present
 }
 
 // rowHash sums a per-field hash over every non-empty field, so the result does not depend on
@@ -410,6 +490,10 @@ func (w *weighter) Apply(rec record.Record, _ *record.Arena) (record.Record, err
 	}
 
 	weight := w.c.weight
+	if w.c.onMissing == MissingKeyKeep && w.c.keyMissing(rec, &w.scratch) {
+		// Kept regardless of the rate, so it stands for itself.
+		return rec.Append(w.c.weightCol, record.Float64(1)), nil
+	}
 	if w.c.mode == modeStrata {
 		_, weight = w.c.stratumThreshold(rec, &w.scratch)
 	}

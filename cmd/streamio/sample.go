@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 
@@ -35,13 +36,14 @@ type sampleFlags struct {
 	seed        string
 	stratifyBy  string
 	stratumRate string
+	onMissing   string
 	key         []string
 	weight      bool
 }
 
 func (f sampleFlags) any() bool {
 	return f.rate != "" || f.rng != "" || f.stratifyBy != "" || f.stratumRate != "" ||
-		len(f.key) > 0 || f.seed != "" || f.weight
+		len(f.key) > 0 || f.seed != "" || f.weight || f.onMissing != ""
 }
 
 // registerSampleFlags adds the sampling flags to cmd, bound to f.
@@ -57,6 +59,9 @@ func registerSampleFlags(cmd *cobra.Command, f *sampleFlags) {
 	fl.StringVar(&f.stratifyBy, "stratify", "", "column whose value picks a stratum, used with --stratum-rate")
 	fl.StringVar(&f.stratumRate, "stratum-rate", "",
 		"per-stratum keep rates, e.g. ERROR=100%,WARN=10%,default=1% (values not listed use default)")
+	fl.StringVar(&f.onMissing, "sample-key-missing", "",
+		"what to do with a record whose --sample-key columns are all empty: row (default, sample it "+
+			"independently by content), keep, drop, or error")
 	fl.BoolVar(&f.weight, "sample-weight", false,
 		"add a "+sample.DefaultWeightColumn+" column of 1/rate so a sample can be re-weighted")
 }
@@ -121,7 +126,9 @@ func sampleOptions(f sampleFlags) ([]streamio.Option, error) {
 		return nil, nil
 	}
 
-	spec := streamio.SamplingSpec{Seed: f.seed, Key: f.key}
+	spec := streamio.SamplingSpec{
+		Seed: f.seed, Key: f.key, OnMissingKey: streamio.MissingKeyPolicy(f.onMissing),
+	}
 	if f.weight {
 		spec.WeightColumn = sample.DefaultWeightColumn
 	}
@@ -130,6 +137,9 @@ func sampleOptions(f sampleFlags) ([]streamio.Option, error) {
 	if f.rate != "" {
 		modes++
 		r, err := parseFraction(f.rate)
+		if err == nil && (r <= 0 || r > 1) {
+			err = fmt.Errorf("%w: got %q", errBadFraction, f.rate)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("--sample: %w", err)
 		}
@@ -165,4 +175,24 @@ func sampleOptions(f sampleFlags) ([]streamio.Option, error) {
 	}
 
 	return []streamio.Option{streamio.WithSampling(spec)}, nil
+}
+
+// warnMissingKey tells the user when records had no value for the sampling key, and what was done
+// with them, since a key that is not always present quietly changes what a sample means.
+func warnMissingKey(w io.Writer, n int64, f sampleFlags) {
+	if n == 0 {
+		return
+	}
+
+	policy := f.onMissing
+	if policy == "" {
+		policy = string(streamio.MissingKeyRow)
+	}
+	action := map[string]string{
+		string(streamio.MissingKeyRow):  "sampled independently by their content",
+		string(streamio.MissingKeyKeep): "kept",
+		string(streamio.MissingKeyDrop): "dropped",
+	}[policy]
+	fmt.Fprintf(w, "warning: %d rows had no value for --sample-key (%s) and were %s\n",
+		n, strings.Join(f.key, ", "), action)
 }

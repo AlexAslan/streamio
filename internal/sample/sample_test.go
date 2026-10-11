@@ -314,3 +314,148 @@ func BenchmarkFilter_Keep(b *testing.B) {
 		})
 	}
 }
+
+// sparseRows has an id on even rows and none on odd rows.
+func sparseRow(i int) record.Record {
+	rec := record.Record{}.Append("n", record.Int64(int64(i), record.SemanticNone))
+	if i%2 == 0 {
+		rec = rec.Append("id", record.Int64(int64(i), record.SemanticNone))
+	}
+	return rec
+}
+
+func keptWithoutKey(t *testing.T, spec sample.Spec, n int) (int, int) {
+	t.Helper()
+
+	kept, without := 0, 0
+	f, _ := filterFor(t, spec)
+	for i := range n {
+		ok, err := f.Keep(sparseRow(i))
+		require.NoError(t, err)
+		if i%2 == 1 {
+			without++
+			if ok {
+				kept++
+			}
+		}
+	}
+	return kept, without
+}
+
+// TestMissingKey_RowFallbackSamplesIndependently is the case that used to be all-or-nothing: every
+// record without a key hashed alike, so they were all kept or all dropped depending on the seed.
+func TestMissingKey_RowFallbackSamplesIndependently(t *testing.T) {
+	t.Parallel()
+
+	const n = 20_000
+	for _, seed := range []string{"a", "b", "c", "d", "e", "f"} {
+		kept, without := keptWithoutKey(t,
+			sample.Spec{Seed: seed, Key: []string{"id"}, Rate: 0.3, HasRate: true}, n)
+
+		assert.InDelta(t, 0.3*float64(without), float64(kept), 5*math.Sqrt(float64(without)*0.3*0.7),
+			"seed %s: records without a key follow the rate, not all-or-nothing", seed)
+	}
+}
+
+func TestMissingKey_Policies(t *testing.T) {
+	t.Parallel()
+
+	base := sample.Spec{Seed: "s", Key: []string{"id"}, Rate: 0.3, HasRate: true}
+
+	t.Run("keep", func(t *testing.T) {
+		t.Parallel()
+		spec := base
+		spec.OnMissingKey = sample.MissingKeyKeep
+		kept, without := keptWithoutKey(t, spec, 2000)
+		assert.Equal(t, without, kept)
+	})
+
+	t.Run("drop", func(t *testing.T) {
+		t.Parallel()
+		spec := base
+		spec.OnMissingKey = sample.MissingKeyDrop
+		kept, _ := keptWithoutKey(t, spec, 2000)
+		assert.Zero(t, kept)
+	})
+
+	t.Run("error", func(t *testing.T) {
+		t.Parallel()
+		spec := base
+		spec.OnMissingKey = sample.MissingKeyError
+		f, _ := filterFor(t, spec)
+
+		ok, err := f.Keep(sparseRow(0))
+		require.NoError(t, err)
+		_ = ok
+		_, err = f.Keep(sparseRow(1))
+		require.ErrorIs(t, err, sample.ErrMissingKey)
+		assert.ErrorContains(t, err, "id")
+	})
+
+	t.Run("unknown policy", func(t *testing.T) {
+		t.Parallel()
+		spec := base
+		spec.OnMissingKey = "sometimes"
+		require.Error(t, spec.Validate())
+	})
+}
+
+func TestMissingKey_OnlyAllMissingCounts(t *testing.T) {
+	t.Parallel()
+
+	spec := sample.Spec{
+		Seed: "s", Key: []string{"a", "b"}, Rate: 0.5, HasRate: true, OnMissingKey: sample.MissingKeyError,
+	}
+	f, _ := filterFor(t, spec)
+
+	// One of two key columns present is still a key.
+	_, err := f.Keep(record.Record{}.Append("a", str("x")))
+	require.NoError(t, err)
+	_, err = f.Keep(record.Record{}.Append("b", str("y")).Append("a", str("")))
+	require.NoError(t, err)
+
+	// None present is not.
+	_, err = f.Keep(record.Record{}.Append("a", str("")).Append("b", record.Null()).Append("c", str("z")))
+	require.ErrorIs(t, err, sample.ErrMissingKey)
+}
+
+func TestMissingKey_IsCounted(t *testing.T) {
+	t.Parallel()
+
+	f, _ := filterFor(t, sample.Spec{Seed: "s", Key: []string{"id"}, Rate: 0.5, HasRate: true})
+	for i := range 100 {
+		_, _ = f.Keep(sparseRow(i))
+	}
+
+	counter, ok := f.(options.MissingKeyCounter)
+	require.True(t, ok)
+	assert.Equal(t, int64(50), counter.MissingKeys())
+}
+
+func TestMissingKey_KeptRecordsWeighOne(t *testing.T) {
+	t.Parallel()
+
+	_, tr := filterFor(t, sample.Spec{
+		Seed: "s", Key: []string{"id"}, Rate: 0.1, HasRate: true,
+		OnMissingKey: sample.MissingKeyKeep, WeightColumn: "w",
+	})
+
+	var arena record.Arena
+	keyed, err := tr.Apply(sparseRow(0), &arena)
+	require.NoError(t, err)
+	unkeyed, err := tr.Apply(sparseRow(1), &arena)
+	require.NoError(t, err)
+
+	wk, _ := keyed.Lookup("w")
+	wu, _ := unkeyed.Lookup("w")
+	assert.InDelta(t, 10, wk.F64, 1e-9)
+	assert.InDelta(t, 1, wu.F64, 1e-9, "a record kept outside the rate stands for itself")
+}
+
+func TestMissingKey_FallbackAllocatesNothing(t *testing.T) {
+	f, _ := filterFor(t, sample.Spec{Seed: "s", Key: []string{"id"}, Rate: 0.5, HasRate: true})
+	rec := sparseRow(1).Append("name", str("x"))
+	_, _ = f.Keep(rec)
+
+	assert.Zero(t, testing.AllocsPerRun(1000, func() { _, _ = f.Keep(rec) }))
+}

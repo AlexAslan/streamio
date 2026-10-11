@@ -183,3 +183,55 @@ func TestRunStats_Sample(t *testing.T) {
 		t.Errorf("sampled profile should report fewer records:\n%s", sampled.String())
 	}
 }
+
+func TestSampleOptions_RateOutOfRangeIsReportedAsABadFraction(t *testing.T) {
+	for _, rate := range []string{"0", "0%", "150%", "1.5", "-5%"} {
+		_, err := sampleOptions(sampleFlags{rate: rate})
+		if !errors.Is(err, errBadFraction) {
+			t.Errorf("--sample %s: err = %v, want errBadFraction", rate, err)
+		}
+	}
+	if _, err := sampleOptions(sampleFlags{rate: "100%"}); err != nil {
+		t.Errorf("--sample 100%%: %v", err)
+	}
+}
+
+func TestSampleOptions_MissingKeyPolicy(t *testing.T) {
+	for _, policy := range []string{"", "row", "keep", "drop", "error"} {
+		if _, err := sampleOptions(sampleFlags{rate: "10%", key: []string{"id"}, onMissing: policy}); err != nil {
+			t.Errorf("policy %q: %v", policy, err)
+		}
+	}
+
+	// A bad policy is reported when the options are applied, before any file is read.
+	in := writeIDs(t, 10)
+	flags := convertFlags{
+		in: in, out: filepath.Join(t.TempDir(), "o.json"),
+		sample: sampleFlags{rate: "10%", key: []string{"id"}, onMissing: "sometimes"},
+	}
+	if err := runConvert(context.Background(), flags, "json"); err == nil {
+		t.Error("an unknown --sample-key-missing was accepted")
+	}
+}
+
+func TestWarnMissingKey(t *testing.T) {
+	var buf bytes.Buffer
+	warnMissingKey(&buf, 0, sampleFlags{})
+	if buf.Len() != 0 {
+		t.Errorf("no missing keys should warn nothing, got %q", buf.String())
+	}
+
+	warnMissingKey(&buf, 12, sampleFlags{key: []string{"user_id"}})
+	got := buf.String()
+	for _, want := range []string{"12 rows", "user_id", "sampled independently"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("warning %q lacks %q", got, want)
+		}
+	}
+
+	buf.Reset()
+	warnMissingKey(&buf, 3, sampleFlags{key: []string{"id"}, onMissing: "drop"})
+	if !strings.Contains(buf.String(), "dropped") {
+		t.Errorf("warning for drop = %q", buf.String())
+	}
+}

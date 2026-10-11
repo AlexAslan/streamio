@@ -54,6 +54,9 @@ type Profile struct {
 	// UnseenColumns lists the columns a WithWhere expression compares that no record had, which is
 	// usually a mistyped name.
 	UnseenColumns []string `json:"unseen_columns,omitempty"`
+	// RowsMissingKey is how many records had no value for any sampling key column. It is zero
+	// unless WithSampling used a Key.
+	RowsMissingKey int64 `json:"rows_missing_key,omitempty"`
 	// ColumnsTruncated is true when the file had more distinct attribute paths than are tracked.
 	ColumnsTruncated bool `json:"columns_truncated"`
 }
@@ -113,6 +116,7 @@ func ProfileReaderAt(ctx context.Context, src Source, opts ...Option) (Profile, 
 		RowsSkipped:      result.Stats.RowsSkipped,
 		PredicateMisses:  result.Stats.PredicateMisses,
 		UnseenColumns:    result.Stats.UnseenColumns,
+		RowsMissingKey:   result.Stats.RowsMissingKey,
 		ColumnsTruncated: merged.ColumnsTruncated,
 		Columns:          make([]ColumnStats, 0, len(merged.Columns)),
 	}

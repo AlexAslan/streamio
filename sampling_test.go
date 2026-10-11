@@ -285,3 +285,88 @@ func TestSampling_ParquetInputKeepsTypedKey(t *testing.T) {
 	fromJSON := keptIDs(t, writeTemp(t, "ids.ndjson", []byte(sb.String())), streamio.WithSampling(spec))
 	assert.Equal(t, fromJSON, fromParquet)
 }
+
+// sparseNDJSON has an id on even rows and none on odd rows.
+func sparseNDJSON(n int) string {
+	var sb strings.Builder
+	for i := range n {
+		if i%2 == 0 {
+			fmt.Fprintf(&sb, "{\"n\":%d,\"id\":%d}\n", i, i)
+		} else {
+			fmt.Fprintf(&sb, "{\"n\":%d}\n", i)
+		}
+	}
+	return sb.String()
+}
+
+func TestSampling_RowsWithoutAKeyAreSampledIndependently(t *testing.T) {
+	t.Parallel()
+
+	path := writeTemp(t, "sparse.ndjson", []byte(sparseNDJSON(4000)))
+
+	for _, seed := range []string{"a", "b", "c", "d"} {
+		var mu sync.Mutex
+		unkeyed := 0
+		res, err := streamio.ProcessFile(context.Background(), path,
+			func(_ context.Context, doc []byte) error {
+				if !strings.Contains(string(doc), `"id"`) {
+					mu.Lock()
+					unkeyed++
+					mu.Unlock()
+				}
+				return nil
+			},
+			streamio.WithSampling(streamio.SamplingSpec{Seed: seed, Key: []string{"id"}, Rate: 0.5}))
+		require.NoError(t, err)
+
+		assert.Equal(t, int64(2000), res.Stats.RowsMissingKey)
+		assert.InDelta(t, 1000, unkeyed, 150, "seed %s: about half of the unkeyed rows, not none or all", seed)
+	}
+}
+
+func TestSampling_MissingKeyPolicies(t *testing.T) {
+	t.Parallel()
+
+	path := writeTemp(t, "sparse.ndjson", []byte(sparseNDJSON(2000)))
+	count := func(policy streamio.MissingKeyPolicy) (int, error) {
+		var mu sync.Mutex
+		unkeyed := 0
+		_, err := streamio.ProcessFile(context.Background(), path,
+			func(_ context.Context, doc []byte) error {
+				if !strings.Contains(string(doc), `"id"`) {
+					mu.Lock()
+					unkeyed++
+					mu.Unlock()
+				}
+				return nil
+			},
+			streamio.WithSampling(streamio.SamplingSpec{
+				Seed: "p", Key: []string{"id"}, Rate: 0.1, OnMissingKey: policy,
+			}))
+		return unkeyed, err
+	}
+
+	keep, err := count(streamio.MissingKeyKeep)
+	require.NoError(t, err)
+	assert.Equal(t, 1000, keep)
+
+	drop, err := count(streamio.MissingKeyDrop)
+	require.NoError(t, err)
+	assert.Zero(t, drop)
+
+	_, err = count(streamio.MissingKeyError)
+	require.ErrorIs(t, err, streamio.ErrMissingKey)
+
+	_, err = count("bogus")
+	require.Error(t, err)
+}
+
+func TestSampling_StatsReportsMissingKeys(t *testing.T) {
+	t.Parallel()
+
+	path := writeTemp(t, "sparse.ndjson", []byte(sparseNDJSON(1000)))
+	p, err := streamio.ProfileFile(context.Background(), path,
+		streamio.WithSampling(streamio.SamplingSpec{Seed: "s", Key: []string{"id"}, Rate: 0.5}))
+	require.NoError(t, err)
+	assert.Equal(t, int64(500), p.RowsMissingKey)
+}
