@@ -168,12 +168,16 @@ func ProcessReaderAt(
 	// row groups verbatim, trading that verbatim-copy optimization for a file that is actually
 	// valid.
 	//
+	// A configured transform also rules raw passthrough out: raw bytes never become records, so a
+	// rename or drop rule would silently not apply to a same-format conversion.
+	//
 	// A format with no raw source at all (arrowio, which has no verbatim-bytes splice analogous to
 	// parquet-go's WriteRowGroup — see formatSupportFor's FormatArrow comment) always takes the
 	// generic path too, same-format conversion included, rather than reaching processRaw only to
 	// have it fail with ErrNoConversionPath despite the decoder/encoder pair actually existing.
 	support, hasRawSource := formatSupportFor(in)
-	if cfg.OutputFormat == in && !cfg.Run.SingleFileOutput && hasRawSource && support.newRawSource != nil {
+	passthrough := cfg.OutputFormat == in && !cfg.Run.SingleFileOutput && cfg.Transformer == nil
+	if passthrough && hasRawSource && support.newRawSource != nil {
 		return processRaw(ctx, src, sink, cfg, in)
 	}
 	return processRecords(ctx, src, sink, cfg, in)

@@ -61,7 +61,8 @@ otherwise) against the input file's own native format — either set explicitly 
   bytes go to the handler untouched — no decode, no encode, no intermediate `record.Record`. NDJSON,
   Parquet, and CSV/TSV each have a raw route (`formatSupportFor`'s `newRawSource`); Arrow IPC doesn't
   — `ipc.FileWriter` has no verbatim-bytes splice — so a same-format Arrow run always takes the
-  generic path instead.
+  generic path instead. Raw bytes never become records, so a same-format run that configures a
+  transform (`WithTransforms`) also takes the generic path: the rules must see decoded rows.
 - **The generic path** takes every cross-format pair through `record.Record`: the input's
   `RecordDecoder` produces canonical rows, the output's `RecordEncoder` renders them, and the same
   worker pool raw passthrough uses drives both. A pair with no decoder for the input or no encoder

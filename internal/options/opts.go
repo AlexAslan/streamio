@@ -86,8 +86,8 @@ type CSVConfig struct {
 type Option func(*Config)
 
 // Transformer changes a decoded canonical record before it is encoded into the requested output
-// format. It is only used on the record path; raw passthrough never decodes records and therefore
-// cannot transform them.
+// format. Configuring one makes ProcessFile take the record path even when the input and output
+// formats match, since raw passthrough never decodes records and could not apply it.
 type Transformer interface {
 	Transform(record.Record) (record.Record, error)
 }
