@@ -2,6 +2,8 @@ package main
 
 import (
 	"errors"
+	"fmt"
+	"io"
 
 	"github.com/spf13/cobra"
 
@@ -36,3 +38,13 @@ func whereOptions(f whereFlags) ([]streamio.Option, error) {
 }
 
 var errWhereStrictNeedsWhere = errors.New("--where-strict needs --where")
+
+// warnPredicateMisses tells the user when a --where comparison met values of the wrong type for its
+// literal, since those rows quietly did not match.
+func warnPredicateMisses(w io.Writer, n int64, expr string) {
+	if n == 0 {
+		return
+	}
+	fmt.Fprintf(w, "warning: %d comparisons in --where %q found a value of the wrong type and did not match "+
+		"(use --where-strict to fail instead)\n", n, expr)
+}

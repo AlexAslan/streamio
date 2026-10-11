@@ -69,3 +69,37 @@ func TestRunStats_Where(t *testing.T) {
 		t.Errorf("want 100 GR records:\n%s", out.String())
 	}
 }
+
+func TestWarnPredicateMisses(t *testing.T) {
+	var buf bytes.Buffer
+	warnPredicateMisses(&buf, 0, "age > 1")
+	if buf.Len() != 0 {
+		t.Errorf("no misses should warn nothing, got %q", buf.String())
+	}
+
+	warnPredicateMisses(&buf, 20, "score > 50")
+	for _, want := range []string{"20 comparisons", `"score > 50"`, "--where-strict"} {
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("warning %q lacks %q", buf.String(), want)
+		}
+	}
+}
+
+func TestRunStats_WhereReportsTypeMisses(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "messy.ndjson")
+	data := "{\"age\":30}\n{\"age\":\"n/a\"}\n{\"age\":\"unknown\"}\n"
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	err := runStats(context.Background(), &out, statsFlags{
+		in: path, output: "json", top: 1, where: whereFlags{expr: "age > 18"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), `"predicate_misses": 2`) {
+		t.Errorf("want 2 predicate misses:\n%s", out.String())
+	}
+}

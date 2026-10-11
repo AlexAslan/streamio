@@ -271,6 +271,9 @@ func renderStatsTable(w io.Writer, path string, prof streamio.Profile, maxWidth 
 	if prof.RowsSkipped > 0 {
 		fmt.Fprintf(tw, "skipped:\t%d\n", prof.RowsSkipped)
 	}
+	if prof.PredicateMisses > 0 {
+		fmt.Fprintf(tw, "where type misses:\t%d\n", prof.PredicateMisses)
+	}
 	fmt.Fprintf(tw, "attributes:\t%d\n\n", len(prof.Columns))
 
 	fmt.Fprintln(tw, "ATTRIBUTE\tNON-EMPTY\t%\tDISTINCT")

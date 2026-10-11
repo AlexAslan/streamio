@@ -386,6 +386,8 @@ func runConvert(ctx context.Context, flags convertFlags, outFormatFlag string) (
 		return fmt.Errorf("converting %s to %s: %w", flags.in, flags.out, err)
 	}
 
+	warnPredicateMisses(os.Stderr, result.Stats.PredicateMisses, flags.where.expr)
+
 	if result.Stats.RowsSkipped > 0 {
 		fmt.Fprintf(os.Stdout, "wrote %s: %d rows read, %d rows skipped, %d documents dispatched\n",
 			flags.out, result.Stats.RowsRead, result.Stats.RowsSkipped, result.Stats.DocumentsDispatched)

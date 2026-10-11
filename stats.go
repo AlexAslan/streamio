@@ -46,6 +46,9 @@ type Profile struct {
 	Records int64 `json:"records"`
 	// RowsSkipped is how many rows WithMaxRowErrors allowed to be skipped; they are not in Records.
 	RowsSkipped int64 `json:"rows_skipped"`
+	// PredicateMisses is how many WithWhere comparisons found a value of the wrong type for their
+	// literal and did not match.
+	PredicateMisses int64 `json:"predicate_misses,omitempty"`
 	// ColumnsTruncated is true when the file had more distinct attribute paths than are tracked.
 	ColumnsTruncated bool `json:"columns_truncated"`
 }
@@ -103,6 +106,7 @@ func ProfileReaderAt(ctx context.Context, src Source, opts ...Option) (Profile, 
 	out := Profile{
 		Records:          merged.Records,
 		RowsSkipped:      result.Stats.RowsSkipped,
+		PredicateMisses:  result.Stats.PredicateMisses,
 		ColumnsTruncated: merged.ColumnsTruncated,
 		Columns:          make([]ColumnStats, 0, len(merged.Columns)),
 	}

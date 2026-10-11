@@ -53,8 +53,151 @@ predicate answers "does this record match?", and a record that doesn't have the 
 ### Wrong types
 
 A value that cannot be compared with its literal (the string `unknown` against `age > 18`, or a
-list against a number) does **not match** and is counted in `Stats.PredicateMisses`. With
-`--where-strict` (`WithWhereStrict`) the run fails instead, naming the column.
+list against a number) does **not match** and is counted in `Stats.PredicateMisses`; the CLI prints
+the count as a warning. With `--where-strict` (`WithWhereStrict`) the run fails instead, naming the
+column.
+
+## Examples
+
+Every example was run, and the numbers are what the tool reported. `people.ndjson` has 1,000 rows:
+`id`, `name` (empty on every 10th row), `country` (US, GR, DE, JP in turn), `age` (10 to 79),
+`active` (every third row), `email` (null on every 7th row) and `score`, a *string* of a number,
+`"n/a"` on every 50th row. `logs.ndjson` has 2,000 lines with `level`, `msg`, `latency_ms` and
+`trace_id`.
+
+### Comparing numbers
+
+```
+$ streamio convert --in people.ndjson --out out.json --where "age >= 18"
+wrote out.json: 1000 rows read, 880 documents dispatched
+
+$ streamio convert --in people.ndjson --out out.json --where "id = 999"
+wrote out.json: 1000 rows read, 1 documents dispatched
+```
+
+`rows read` is every row decoded; `documents dispatched` is what matched. In the library the
+difference is `Stats.RowsFiltered`.
+
+### Several conditions
+
+```
+$ --where "age >= 18 and country in ('US','GR')"
+wrote out.json: 1000 rows read, 440 documents dispatched
+
+$ --where "country = 'JP' or age < 15"
+wrote out.json: 1000 rows read, 310 documents dispatched
+
+$ --where "not (country = 'US')"
+wrote out.json: 1000 rows read, 750 documents dispatched
+
+$ --where "country not in ('US','GR')"
+wrote out.json: 1000 rows read, 500 documents dispatched
+```
+
+`and` binds tighter than `or`; use parentheses when you want the other grouping.
+
+### Text
+
+```
+$ --where "name starts_with 'user9'"
+wrote out.json: 1000 rows read, 100 documents dispatched
+
+$ --where "email is not empty and email contains '@x.org'"
+wrote out.json: 1000 rows read, 857 documents dispatched
+
+$ streamio convert --in logs.ndjson --out out.json --where "msg contains 'timeout'"
+wrote out.json: 2000 rows read, 118 documents dispatched
+
+$ streamio convert --in logs.ndjson --out out.json --where "level in ('ERROR','WARN') and latency_ms > 500"
+wrote out.json: 2000 rows read, 171 documents dispatched
+```
+
+`contains` and `starts_with` are case-sensitive and take a quoted string.
+
+### Empty, null and missing
+
+```
+$ --where "name is empty"
+wrote out.json: 1000 rows read, 100 documents dispatched
+
+$ --where "missing_col = 1"
+wrote out.json: 1000 rows read, 0 documents dispatched
+
+$ --where "not missing_col = 1"
+wrote out.json: 1000 rows read, 1000 documents dispatched
+```
+
+`is empty` is true for a missing column, a `null`, an empty string, and an empty list or map. A
+comparison with a missing value is simply false, so its negation is true: `not missing_col = 1`
+matches every row. If you want "has a value and it isn't 1", say so: `missing_col is not empty and
+missing_col != 1`.
+
+### A column that is text but holds numbers
+
+`score` is a string column, as it would be from a CSV:
+
+```
+$ --where "score > 50"
+warning: 20 comparisons in --where "score > 50" found a value of the wrong type and did not match (use --where-strict to fail instead)
+wrote out.json: 1000 rows read, 490 documents dispatched
+```
+
+The number literal makes the comparison numeric, so `"51"` to `"99"` are compared as numbers: 490 rows.
+The 20 rows holding `"n/a"` cannot be read as a number, so they do not match, and the tool says so
+instead of dropping them silently. To fail on them:
+
+```
+$ --where "score > 50" --where-strict
+Error: converting people.ndjson to out.json: value cannot be compared: column "score" against 50
+```
+
+Quote the literal to compare text instead: `score > '5'` is a lexicographic comparison and would
+match `"9"`.
+
+### `stats` takes the same predicate
+
+```
+$ streamio stats --in people.ndjson --where "age >= 70" --columns country --top 4
+file:        people.ndjson
+records:     140
+attributes:  1
+
+ATTRIBUTE  NON-EMPTY  %       DISTINCT
+country    140        100.0%  4
+
+top values of country:
+  DE  35  25.0%
+  GR  35  25.0%
+  JP  35  25.0%
+  US  35  25.0%
+```
+
+`records` is the matching rows. Type misses appear as a `where type misses:` line, and as
+`predicate_misses` in JSON output.
+
+### Mistakes are reported with a position
+
+```
+$ --where "age >"
+Error: ... invalid where expression "age >": syntax error at column 6: expected a value (number, quoted string, true or false), found "end of expression"
+
+$ --where "(age = 1"
+Error: ... syntax error at column 9: expected ) but found "end of expression"
+
+$ --where "age ~ 1"
+Error: ... syntax error at column 5: unexpected character "~"
+
+$ --where "name contains 5"
+Error: ... syntax error at column 15: expected a quoted string but found "5"
+
+$ --where "active < true"
+Error: ... syntax error at column 8: < cannot compare true or false: use = or !=
+
+$ --where "age in ()"
+Error: ... syntax error at column 9: expected a value (number, quoted string, true or false), found ")"
+```
+
+An expression is validated before any file is opened, so a typo costs nothing.
 
 ## Interaction with other options
 
