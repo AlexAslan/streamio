@@ -7,7 +7,7 @@ import (
 	"github.com/AlexAslan/streamio/internal/sample"
 )
 
-// SamplingSpec describes which records a run keeps. Set exactly one of Rate, RangeHi, or
+// SamplingSpec describes which records a run keeps. Set exactly one of Rate, RangeHi, Count, or
 // StratifyBy; the choice is a pure function of Seed and the record's key.
 //
 //nolint:govet // Fields are grouped by meaning, with their docs, rather than packed by size.
@@ -37,6 +37,15 @@ type SamplingSpec struct {
 	// default, MissingKeyRow, samples it independently by its whole content; hashing the missing
 	// key would give every such record one hash and keep or drop them all together.
 	OnMissingKey MissingKeyPolicy
+	// Count keeps exactly this many distinct keys: the ones with the smallest hashes, or all of
+	// them when there are fewer. It reads the input twice.
+	Count int
+	// MinPerStratum keeps at least this many distinct keys of every stratum in strata mode,
+	// whatever the stratum's rate, so rare values are not lost. It reads the input twice.
+	MinPerStratum int
+	// MaxStrata bounds how many distinct stratum values MinPerStratum tracks; the rest use the
+	// default rate. Zero means 10,000.
+	MaxStrata int
 }
 
 // MissingKeyPolicy says what happens to a record with no value for any of its sampling key
@@ -64,6 +73,8 @@ var ErrMissingKey = sample.ErrMissingKey
 // any worker count, input format or row order, and a lower rate keeps a subset of what a higher one
 // keeps. Sampling runs on the decoded input record, before any transform. It makes a same-format
 // conversion decode and re-encode instead of streaming raw bytes.
+//
+// Count and MinPerStratum need to see the data before deciding, so those runs read the input twice.
 func WithSampling(spec SamplingSpec) Option {
 	opt, err := sample.Option(spec.internal())
 	if err != nil {
@@ -78,18 +89,22 @@ func WithSampling(spec SamplingSpec) Option {
 
 func (s SamplingSpec) internal() sample.Spec {
 	return sample.Spec{
-		StratumRates: s.StratumRates,
-		Seed:         s.Seed,
-		StratifyBy:   s.StratifyBy,
-		WeightColumn: s.WeightColumn,
-		Key:          s.Key,
-		Rate:         s.Rate,
-		RangeLo:      s.RangeLo,
-		RangeHi:      s.RangeHi,
-		DefaultRate:  s.DefaultRate,
-		OnMissingKey: s.OnMissingKey,
-		HasRate:      s.Rate > 0,
-		HasRange:     s.RangeHi > 0,
-		HasStrata:    s.StratifyBy != "",
+		StratumRates:  s.StratumRates,
+		Seed:          s.Seed,
+		StratifyBy:    s.StratifyBy,
+		WeightColumn:  s.WeightColumn,
+		Key:           s.Key,
+		Rate:          s.Rate,
+		RangeLo:       s.RangeLo,
+		RangeHi:       s.RangeHi,
+		DefaultRate:   s.DefaultRate,
+		Count:         s.Count,
+		MinPerStratum: s.MinPerStratum,
+		MaxStrata:     s.MaxStrata,
+		HasRate:       s.Rate > 0,
+		HasRange:      s.RangeHi > 0,
+		HasStrata:     s.StratifyBy != "",
+		OnMissingKey:  s.OnMissingKey,
+		HasCount:      s.Count > 0,
 	}
 }

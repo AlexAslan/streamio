@@ -152,6 +152,12 @@ func ProcessReaderAt(
 		return Result{}, err
 	}
 	defer func() { _ = release() }()
+
+	// Components that need to see the data first (an exact-size sample) run their pass now, over the
+	// already-resolved plain input.
+	if prepErr := runPreparers(ctx, src, &cfg); prepErr != nil {
+		return Result{}, prepErr
+	}
 	in := cfg.InputFormat
 
 	// Requested output matches the input's own native format: raw passthrough, sending the

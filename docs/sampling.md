@@ -58,10 +58,30 @@ not per bucket.
 Keying by `trace_id` keeps whole traces together: every span and log line of a kept trace is kept.
 A record with no `trace_id` hashes by its content and is sampled independently.
 
+## Exact sizes and guaranteed minimums
+
+A rate gives *about* `rate × N` keys. Two options read the input twice to give a guarantee:
+
+- **`--sample-n 10000`** keeps exactly 10,000 distinct keys: the ones with the smallest hashes.
+  The first pass finds the 10,000th-smallest hash; the second keeps everything at or below it. A key
+  with several rows keeps all of them, so `--sample-n` counts keys, not rows. With fewer than N keys,
+  everything is kept. Asking for more keys keeps a superset of asking for fewer.
+- **`--stratify col --sample 1% --min-per-stratum 50`** keeps at least 50 distinct keys of every
+  value of `col`, whatever its rate, so a rare value is not lost to a 1% sample. A value with fewer
+  than 50 keys is kept whole. Listed `--stratum-rate`s are a floor, not a cap. `--max-strata`
+  (default 10,000) bounds how many distinct values are tracked; the rest use the default rate.
+
+The first pass sees what the sampler would see: any row filter configured before the sampler narrows
+the candidates it counts, and one configured after it does not. `--sample-weight` reports
+`1/rate` using the effective rate each stratum ended up with.
+
+Memory for the first pass is about 16 bytes per tracked hash: `--sample-n` holds N, and
+`--min-per-stratum` holds `min × strata`, which is capped at 20 million.
+
 ## Things to know
 
 - **Rates are Bernoulli per key.** A 1% sample of 1,000,000 distinct keys keeps about 10,000, within
-  a few hundred, not exactly 10,000.
+  a few hundred, not exactly 10,000. Use `--sample-n` when you need the exact count.
 - **Few keys, few rows.** A key with 50 distinct values can only be sampled in 50 groups; use a
   finer key or accept the coarseness.
 - **Set `--sample-seed` explicitly.** The default seed is the empty string, which is deterministic
@@ -302,6 +322,54 @@ seed all 500 were kept and under another none were. That is what this replaces.
 With `keep`, `--sample-weight` gives those rows weight 1, since they were not sampled at a rate.
 `stats` prints the same count as a `no sample key:` line.
 
+### 14. Exactly N keys
+
+```
+$ streamio convert --in users.ndjson --out n150.json --sample-n 150 --sample-key id --sample-seed e
+wrote n150.json: 2000 rows read, 150 documents dispatched
+$ streamio convert --in users.ndjson --out n300.json --sample-n 300 --sample-key id --sample-seed e
+wrote n300.json: 2000 rows read, 300 documents dispatched
+# every one of the 150 is also in the 300
+```
+
+**What happens:** the input is read twice. The first pass finds the 150th-smallest hash among the
+distinct keys; the second keeps every row at or below it. You get exactly 150, where `--sample 7.5%`
+would give "about 150". Asking for more keys keeps a superset. `rows read` counts only the second
+pass.
+
+**Related cases:**
+
+```
+$ streamio convert --in dups.ndjson --out nd.json --sample-n 10 --sample-key id --sample-seed d
+wrote nd.json: 1000 rows read, 50 documents dispatched      # 200 ids x 5 rows: 10 keys = 50 rows
+$ streamio convert --in users.ndjson --out nall.json --sample-n 5000 --sample-key id --sample-seed e
+wrote nall.json: 2000 rows read, 2000 documents dispatched  # fewer keys than asked: all kept
+```
+
+`--sample-n` counts **keys**, not rows. With `--sample-key-missing keep` or `drop`, records the
+policy decides do not use up a slot.
+
+### 15. A guaranteed minimum for rare values
+
+`tiers.ndjson` has 12,000 rows: 11,967 `common`, 30 `rare`, 3 `tiny`.
+
+```
+$ streamio convert --in tiers.ndjson --out t_plain.json --stratify tier --sample 1% --sample-key id --sample-seed m
+wrote t_plain.json: 12000 rows read, 121 documents dispatched
+# {'common': 121}                                  <- the rare values vanished
+
+$ streamio convert --in tiers.ndjson --out t_min.json --stratify tier --sample 1% \
+    --min-per-stratum 20 --sample-key id --sample-seed m
+wrote t_min.json: 12000 rows read, 144 documents dispatched
+# {'rare': 20, 'tiny': 3, 'common': 121}
+```
+
+**What happens:** a 1% sample of 33 rare rows would usually keep none of them. With
+`--min-per-stratum 20` the first pass finds each stratum's 20 smallest hashes, and a stratum keeps at
+least that many keys regardless of its rate: `rare` keeps exactly 20, `tiny` (only 3 keys) is kept
+whole, and `common` is unaffected. Add `--sample-weight` and each stratum's weight reflects the rate
+it ended up with, so counts can still be recovered.
+
 ## What happens in the awkward cases
 
 | Case | What the tool does |
@@ -402,6 +470,7 @@ a profile of 169 records. An invalid spec is reported as an error before any fil
 streamio: invalid sampling: sampling rate must be in (0, 1]: got 2
 ```
 
-`SamplingSpec` selects exactly one of `Rate`, `RangeHi` (with `RangeLo`), or `StratifyBy`. A `Rate`
-of 0 cannot be told from "not set", so it is reported as a missing mode; the CLI checks the range
-itself and says so more precisely.
+`SamplingSpec` selects exactly one of `Rate`, `RangeHi` (with `RangeLo`), `Count`, or `StratifyBy`
+(where `DefaultRate` is the base rate and `MinPerStratum` the guaranteed minimum). A `Rate` of 0
+cannot be told from "not set", so it is reported as a missing mode; the CLI checks the range itself
+and says so more precisely.

@@ -2,6 +2,7 @@ package streamio
 
 import (
 	"context"
+	"fmt"
 	"os"
 
 	"github.com/AlexAslan/streamio/internal/formatio"
@@ -58,6 +59,20 @@ func ConsumeReaderAt(
 	}
 	defer func() { _ = release() }()
 
+	if prepErr := runPreparers(ctx, src, &cfg); prepErr != nil {
+		return Result{}, prepErr
+	}
+	return consumeOpened(ctx, src, cfg, newConsumer)
+}
+
+// consumeOpened runs one consume pass over an input that is already resolved: a plain, sized
+// source and a definite input format.
+func consumeOpened(
+	ctx context.Context,
+	src Source,
+	cfg options.Config,
+	newConsumer func() (RecordConsumer, error),
+) (Result, error) {
 	support, ok := formatSupportFor(cfg.InputFormat)
 	if !ok || support.newRecordDecoder == nil {
 		return Result{}, errNoRecordDecoder(cfg.InputFormat)
@@ -78,6 +93,30 @@ func ConsumeReaderAt(
 	discard := func(context.Context, []byte) error { return nil }
 
 	return pool.RunRecords(ctx, cfg, dec, newEncoder, cfg.Transformer, discard)
+}
+
+// runPreparers runs every configured preparer's first pass, in order, before the main run.
+//
+// A pass sees what the preparer's own stage would see: the input decoded under the run's options
+// and filtered by only the row filters configured before it. Transforms are left out, since they
+// run after filters, and a pass writes nothing.
+func runPreparers(ctx context.Context, src Source, cfg *options.Config) error {
+	for _, slot := range cfg.Preparers {
+		snapshot := *cfg
+		snapshot.RowFilters = cfg.RowFilters[:slot.FilterIndex]
+		snapshot.RecordTransforms = nil
+		snapshot.Transformer = nil
+		snapshot.Preparers = nil
+
+		pass := func(newConsumer func() (RecordConsumer, error)) error {
+			_, err := consumeOpened(ctx, src, snapshot, newConsumer)
+			return err
+		}
+		if err := slot.Preparer.Prepare(ctx, pass); err != nil {
+			return fmt.Errorf("preparing run: %w", err)
+		}
+	}
+	return nil
 }
 
 // consumerEncoder adapts a RecordConsumer to the pool's RecordEncoder seam: it renders no document,

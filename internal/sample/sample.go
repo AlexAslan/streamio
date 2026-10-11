@@ -68,9 +68,18 @@ type Spec struct {
 	// OnMissingKey says what happens to a record whose key columns are all missing, null or empty.
 	// The zero value is MissingKeyRow.
 	OnMissingKey MissingKeyPolicy
+	// Count keeps exactly this many distinct keys, the ones with the smallest hashes. It needs a
+	// first pass over the input.
+	Count int
+	// MinPerStratum keeps at least this many distinct keys of every stratum in strata mode,
+	// whatever the stratum's rate. It needs a first pass over the input.
+	MinPerStratum int
+	// MaxStrata bounds how many distinct stratum values a first pass tracks; the rest share the
+	// default rate. Zero means DefaultMaxStrata.
+	MaxStrata int
 	// HasRate, HasRange and HasStrata say which mode is selected, so a zero rate or range is an
 	// error instead of being mistaken for "unset".
-	HasRate, HasRange, HasStrata bool
+	HasRate, HasRange, HasStrata, HasCount bool
 }
 
 var (
@@ -84,12 +93,18 @@ var (
 	errBadPolicy    = errors.New("unknown missing-key policy: want row, keep, drop, or error")
 	// ErrMissingKey is returned under MissingKeyError for a record with no value for its key.
 	ErrMissingKey = errors.New("sampling key is missing")
+
+	errBadCount         = errors.New("sampling count must be at least 1")
+	errBadMin           = errors.New("min per stratum must not be negative")
+	errMinWithoutStrata = errors.New("min per stratum needs strata mode")
+	errTooManyHashes    = errors.New("min per stratum would track too many hashes; lower it or the strata limit")
+	errNotPrepared      = errors.New("sampling was not prepared: its first pass did not run")
 )
 
 // Validate reports a problem that would make the spec ambiguous or unusable.
 func (s Spec) Validate() error {
 	modes := 0
-	for _, on := range []bool{s.HasRate, s.HasRange, s.HasStrata} {
+	for _, on := range []bool{s.HasRate, s.HasRange, s.HasStrata, s.HasCount} {
 		if on {
 			modes++
 		}
@@ -117,9 +132,21 @@ func (s Spec) Validate() error {
 		return s.validateRate()
 	case s.HasRange:
 		return s.validateRange()
+	case s.HasCount:
+		return s.validateCount()
 	default:
 		return s.validateStrata()
 	}
+}
+
+func (s Spec) validateCount() error {
+	if s.Count < 1 {
+		return fmt.Errorf("%w: got %d", errBadCount, s.Count)
+	}
+	if s.MinPerStratum != 0 {
+		return errMinWithoutStrata
+	}
+	return nil
 }
 
 func (s Spec) validateRate() error {
@@ -140,6 +167,14 @@ func (s Spec) validateStrata() error {
 	if s.StratifyBy == "" {
 		return errNoStratifyBy
 	}
+	if s.MinPerStratum < 0 {
+		return fmt.Errorf("%w: got %d", errBadMin, s.MinPerStratum)
+	}
+	if s.MinPerStratum > 0 {
+		if cells := int64(s.maxStrata()) * int64(s.MinPerStratum); cells > maxTrackedHashes {
+			return fmt.Errorf("%w: %d strata x %d is %d", errTooManyHashes, s.maxStrata(), s.MinPerStratum, cells)
+		}
+	}
 	if len(s.StratumRates) == 0 && s.DefaultRate == 0 {
 		return errNoStrata
 	}
@@ -152,6 +187,20 @@ func (s Spec) validateStrata() error {
 		return fmt.Errorf("%w: default has %v", errBadRate, s.DefaultRate)
 	}
 	return nil
+}
+
+// DefaultMaxStrata is how many distinct stratum values a first pass tracks when Spec.MaxStrata is
+// zero.
+const DefaultMaxStrata = 10_000
+
+// maxTrackedHashes bounds the hashes a first pass may hold across all strata (about 16 bytes each).
+const maxTrackedHashes = 20_000_000
+
+func (s Spec) maxStrata() int {
+	if s.MaxStrata > 0 {
+		return s.MaxStrata
+	}
+	return DefaultMaxStrata
 }
 
 // hashBits is the width of the hash a fraction is scaled to.
@@ -201,10 +250,16 @@ type compiled struct {
 	rate         threshold
 	lo           threshold
 	defaultT     threshold
+	countT       threshold
 	defaultW     float64
 	seed         uint64
 	weight       float64
+	count        int
+	minPer       int
+	maxStrata    int
 	mode         mode
+	// prepared is set once a first pass has resolved the count or strata thresholds.
+	prepared bool
 }
 
 type mode uint8
@@ -213,6 +268,7 @@ const (
 	modeRate mode = iota
 	modeRange
 	modeStrata
+	modeCount
 )
 
 func seedOf(s string) uint64 {
@@ -250,8 +306,13 @@ func compile(s Spec) (*compiled, error) {
 		c.lo = threshold{bound: uint64(math.Ldexp(s.RangeLo, hashBits))}
 		c.hi = rateThreshold(s.RangeHi)
 		c.weight = weightOf(s.RangeHi - s.RangeLo)
+	case s.HasCount:
+		c.mode = modeCount
+		c.count = s.Count
 	case s.HasStrata:
 		c.mode = modeStrata
+		c.minPer = s.MinPerStratum
+		c.maxStrata = s.maxStrata()
 		c.stratifyPath = strings.Split(s.StratifyBy, ".")
 		c.strata = make(map[string]threshold, len(s.StratumRates))
 		c.weights = make(map[string]float64, len(s.StratumRates))
@@ -262,17 +323,32 @@ func compile(s Spec) (*compiled, error) {
 		c.defaultT = rateThreshold(s.DefaultRate)
 		c.defaultW = weightOf(s.DefaultRate)
 	}
+	// Rate, range, and plain strata decide from the spec alone; count and min-per-stratum wait for a
+	// first pass to resolve them.
+	c.prepared = c.mode != modeCount && c.minPer == 0
 	return c, nil
 }
 
-// Option returns the pipeline options that apply spec: a row filter and, when a weight column is
-// requested, a transform that adds it. It reports an invalid spec immediately.
+// Option returns the pipeline options that apply spec: a row filter, a transform that adds the
+// weight column when one is requested, and, for the modes that need a first pass, the preparer that
+// runs it. It reports an invalid spec immediately.
 func Option(s Spec) (options.Option, error) {
-	c, err := compile(s)
-	if err != nil {
+	if _, err := compile(s); err != nil {
 		return nil, err
 	}
 	return func(cfg *options.Config) {
+		// Compiled per application: a first pass resolves thresholds on it, and one Option value may
+		// be applied to several runs.
+		c, err := compile(s)
+		if err != nil {
+			return
+		}
+		if !c.prepared {
+			cfg.Preparers = append(cfg.Preparers, options.PreparerSlot{
+				Preparer:    &preparer{c: c},
+				FilterIndex: len(cfg.RowFilters),
+			})
+		}
 		cfg.RowFilters = append(cfg.RowFilters, func() (options.RowFilter, error) {
 			return &filter{c: c}, nil
 		})
@@ -298,6 +374,9 @@ func (f *filter) MissingKeys() int64 { return f.missing }
 
 // Keep reports whether rec is in the sample.
 func (f *filter) Keep(rec record.Record) (bool, error) {
+	if !f.c.prepared {
+		return false, errNotPrepared
+	}
 	h, missing := f.hashOf(rec)
 	if missing {
 		f.missing++
@@ -320,6 +399,8 @@ func (f *filter) Keep(rec record.Record) (bool, error) {
 	case modeStrata:
 		t, _ := f.c.stratumThreshold(rec, &f.scratch)
 		return t.keeps(h), nil
+	case modeCount:
+		return f.c.countT.keeps(h), nil
 	}
 	return false, nil
 }
@@ -345,16 +426,9 @@ func (c *compiled) keyMissing(rec record.Record, scratch *[]byte) bool {
 
 // stratumThreshold returns the keep threshold and weight for rec's stratum.
 func (c *compiled) stratumThreshold(rec record.Record, scratch *[]byte) (threshold, float64) {
-	v, ok := lookupPath(rec, c.stratifyPath)
-	if ok {
-		var text []byte
-		text, ok = v.AppendText((*scratch)[:0])
-		*scratch = text
-		if ok {
-			if t, found := c.strata[string(text)]; found {
-				return t, c.weights[string(text)]
-			}
-		}
+	text := c.stratumText(rec, scratch)
+	if t, found := c.strata[string(text)]; found {
+		return t, c.weights[string(text)]
 	}
 	return c.defaultT, c.defaultW
 }

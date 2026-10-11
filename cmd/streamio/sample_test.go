@@ -68,7 +68,7 @@ func TestSampleOptions_RejectsInconsistentFlags(t *testing.T) {
 		"key without mode":     {flags: sampleFlags{key: []string{"id"}}, want: errSampleNeedsMode},
 		"weight without mode":  {flags: sampleFlags{weight: true}, want: errSampleNeedsMode},
 		"stratum rate no col":  {flags: sampleFlags{stratumRate: "A=1"}, want: errStratumNeedsCol},
-		"stratify and rate":    {flags: sampleFlags{stratifyBy: "level", rate: "5%"}, want: errSampleFlagsMode},
+		"stratify and range":   {flags: sampleFlags{stratifyBy: "level", rng: "0:0.5"}, want: errSampleFlagsMode},
 		"bad rate":             {flags: sampleFlags{rate: "lots"}, want: errBadFraction},
 		"bad range":            {flags: sampleFlags{rng: "x"}, want: errBadRangeFlag},
 		"bad stratum in rates": {flags: sampleFlags{stratifyBy: "level", stratumRate: "A"}, want: errBadStratumRate},
@@ -233,5 +233,46 @@ func TestWarnMissingKey(t *testing.T) {
 	warnMissingKey(&buf, 3, sampleFlags{key: []string{"id"}, onMissing: "drop"})
 	if !strings.Contains(buf.String(), "dropped") {
 		t.Errorf("warning for drop = %q", buf.String())
+	}
+}
+
+func TestSampleOptions_CountAndMinPerStratum(t *testing.T) {
+	opts, err := sampleOptions(sampleFlags{count: 100, key: []string{"id"}})
+	if err != nil || len(opts) != 1 {
+		t.Fatalf("--sample-n: opts = %d err = %v", len(opts), err)
+	}
+
+	// --sample beside --stratify is strata mode's base rate, not a second mode.
+	opts, err = sampleOptions(sampleFlags{stratifyBy: "tier", rate: "1%", minPer: 25})
+	if err != nil || len(opts) != 1 {
+		t.Fatalf("stratify + sample + min: opts = %d err = %v", len(opts), err)
+	}
+
+	for name, tc := range map[string]struct {
+		want  error
+		flags sampleFlags
+	}{
+		"count and rate":       {flags: sampleFlags{count: 5, rate: "10%"}, want: errSampleFlagsMode},
+		"min without stratify": {flags: sampleFlags{rate: "10%", minPer: 5}, want: errMinNeedsStratify},
+		"max without stratify": {flags: sampleFlags{count: 5, maxStrata: 5}, want: errMinNeedsStratify},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, optErr := sampleOptions(tc.flags); !errors.Is(optErr, tc.want) {
+				t.Errorf("err = %v, want %v", optErr, tc.want)
+			}
+		})
+	}
+}
+
+func TestRunConvert_SampleNKeepsExactlyNKeys(t *testing.T) {
+	in := writeIDs(t, 5000)
+	out := filepath.Join(t.TempDir(), "out.json")
+	flags := convertFlags{in: in, out: out, sample: sampleFlags{count: 250, key: []string{"id"}, seed: "n"}}
+
+	if err := runConvert(context.Background(), flags, "json"); err != nil {
+		t.Fatalf("runConvert: %v", err)
+	}
+	if got := countNDJSONLines(t, out); got != 250 {
+		t.Errorf("kept %d rows, want exactly 250", got)
 	}
 }
