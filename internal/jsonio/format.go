@@ -78,22 +78,42 @@ const (
 	nanosPerSecond = 1_000_000_000
 )
 
+// AppendDate appends a day count since the Unix epoch to dst as an ISO-8601 calendar date.
+func AppendDate(dst []byte, days int64) []byte {
+	return time.Unix(days*secondsPerDay, 0).UTC().AppendFormat(dst, dateLayout)
+}
+
+// AppendTimestampMillis appends an epoch timestamp in milliseconds to dst as an ISO-8601 instant.
+func AppendTimestampMillis(dst []byte, v int64) []byte {
+	return time.UnixMilli(v).UTC().AppendFormat(dst, millisLayout)
+}
+
+// AppendTimestampMicros appends an epoch timestamp in microseconds to dst as an ISO-8601 instant.
+func AppendTimestampMicros(dst []byte, v int64) []byte {
+	return time.UnixMicro(v).UTC().AppendFormat(dst, microsLayout)
+}
+
+// AppendTimestampNanos appends an epoch timestamp in nanoseconds to dst as an ISO-8601 instant.
+func AppendTimestampNanos(dst []byte, v int64) []byte {
+	return time.Unix(v/nanosPerSecond, v%nanosPerSecond).UTC().AppendFormat(dst, nanosLayout)
+}
+
 // Date renders a day count since the Unix epoch as an ISO-8601 calendar date.
 func Date(days int64) string {
-	return time.Unix(days*secondsPerDay, 0).UTC().Format(dateLayout)
+	return string(AppendDate(nil, days))
 }
 
 // TimestampMillis renders an epoch timestamp in milliseconds as an ISO-8601 instant.
 func TimestampMillis(v int64) string {
-	return time.UnixMilli(v).UTC().Format(millisLayout)
+	return string(AppendTimestampMillis(nil, v))
 }
 
 // TimestampMicros renders an epoch timestamp in microseconds as an ISO-8601 instant.
 func TimestampMicros(v int64) string {
-	return time.UnixMicro(v).UTC().Format(microsLayout)
+	return string(AppendTimestampMicros(nil, v))
 }
 
 // TimestampNanos renders an epoch timestamp in nanoseconds as an ISO-8601 instant.
 func TimestampNanos(v int64) string {
-	return time.Unix(v/nanosPerSecond, v%nanosPerSecond).UTC().Format(nanosLayout)
+	return string(AppendTimestampNanos(nil, v))
 }
