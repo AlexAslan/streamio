@@ -5,8 +5,8 @@
 | `WithInputFormat(f)` | content sniffing | Source file's native format. |
 | `WithInputCompression(c)` | auto-detected | `CompressionNone`, `CompressionGzip`, `CompressionZstd`, `CompressionBzip2`, `CompressionXZ`, `CompressionLZ4`, `CompressionSnappy` or `CompressionBrotli`; pins the compression instead of sniffing it. Brotli can only be selected this way or by a `.br` extension. |
 | `WithMaxDecompressedSize(n)` | no cap | Fails with `ErrDecompressedTooLarge` if a compressed input expands past `n` bytes. |
-| `WithOutputFormat(f)` | `FormatJSON` | Format documents are delivered in. Matching the input's native format selects raw passthrough where available. |
-| `WithTransforms(rules...)` | none | Declarative rename/drop path transforms, generic path only. Dotted paths address nested map entries. |
+| `WithOutputFormat(f)` | `FormatJSON` | Format documents are delivered in. Matching the input's native format selects raw passthrough where available, unless a transform is configured. |
+| `WithTransforms(rules...)` | none | Declarative rename/drop path transforms. Configuring any makes a same-format conversion decode and re-encode instead of streaming raw bytes, so the rules always apply. Dotted paths address nested map entries. |
 | `WithParallelWorkers(n)` | `1` | Decode workers; also sizes the dispatch pool. |
 | `WithChunkSize(n)` | 32 MiB | NDJSON/CSV/TSV byte-range chunk size. |
 | `WithReadBufferSize(n)` | 32 MiB | NDJSON/CSV/TSV `bufio.Reader` size, capped to `ChunkSize`. |
