@@ -1,11 +1,27 @@
 # Architecture
 
+## Input detection
+
+Before routing, `ProcessFile` resolves two things from the file's first 4 KiB:
+
+1. **Compression**: gzip (`1f 8b`) and zstd (`28 b5 2f fd`) magic. A compressed input is
+   decompressed once, up front, into memory (up to 64 MiB) or a temp file removed when the run
+   ends. This keeps the `io.ReaderAt` every decoder relies on, so NDJSON chunking and Parquet row
+   groups still run in parallel. `WithMaxDecompressedSize` guards against decompression bombs.
+2. **Format**: Parquet (`PAR1`) and Arrow (`ARROW1`) by magic number, NDJSON by a leading `{`, and
+   CSV vs TSV by which delimiter appears a consistent number of times per line outside quotes.
+
+The extension is only a tiebreaker for what content can't settle (an empty file, a single-column
+CSV or TSV, text with no delimiter at all). When content and extension disagree, content wins
+and the `Logger` gets a one-line note. Content that matches nothing, with no extension hint, fails
+with `ErrUnknownFormat` instead of being guessed as NDJSON.
+
 ## Entry point
 
 ```go
 result, err := streamio.ProcessFile(ctx, path, handler,
     streamio.WithParallelWorkers(4),
-    streamio.WithInputFormat(streamio.FormatParquet),  // optional: default is extension detection
+    streamio.WithInputFormat(streamio.FormatParquet),  // optional: default is content sniffing
     streamio.WithOutputFormat(streamio.FormatParquet), // default: streamio.FormatJSON
     streamio.WithTransforms(
         streamio.RenamePath("Timestamp", "@timestamp"),
@@ -16,14 +32,13 @@ result, err := streamio.ProcessFile(ctx, path, handler,
 
 `ProcessFile` compares the requested output format (`FormatJSON` unless `WithOutputFormat` says
 otherwise) against the input file's own native format — either set explicitly with
-`WithInputFormat`, or derived from its extension (`.parquet`, `.csv`, `.tsv`, `.arrow`,
-case-insensitive; anything else means NDJSON) — and picks one of two routes:
+`WithInputFormat`, or sniffed from its contents (see below) — and picks one of two routes:
 
 ```
               streamio.ProcessFile(ctx, path, handler, opts...)
                                  │
                     apply opts → cfg
-              in := cfg.InputFormat or detectInputFormat(path)
+              in := cfg.InputFormat or sniffed from contents
                                  │
               ┌──────────────────┴───────────────────────┐
               │                                          │

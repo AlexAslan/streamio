@@ -16,6 +16,10 @@ import (
 // errUnknownFormat is returned when --in-format or --out-format names an unsupported format.
 var errUnknownFormat = errors.New("unknown format: want json, parquet, csv, tsv, or arrow")
 
+// errUnknownCompression is returned when --in-compression or --out-compression names an
+// unsupported compression.
+var errUnknownCompression = errors.New("unknown compression: want auto, none, gzip, or zstd")
+
 // errInvalidCSVDelimiter is returned when --csv-delimiter isn't exactly one character.
 var errInvalidCSVDelimiter = errors.New("--csv-delimiter must be exactly one character")
 
@@ -27,6 +31,8 @@ var errNegativeMaxRowErrors = errors.New("--max-row-errors must not be negative"
 type convertFlags struct {
 	in, out        string
 	inFormat       string
+	inCompression  string
+	outCompression string
 	csvDelimiter   string
 	readBufferSize int
 	batchSize      int
@@ -45,7 +51,13 @@ func getConvertCmd() *cobra.Command {
 		Use:   "convert",
 		Short: "Convert a document file between NDJSON, Parquet, CSV, TSV, and Arrow IPC",
 		Long: `Convert reads --in, decodes it as NDJSON, Parquet, CSV, TSV, or Arrow IPC (auto-detected
-from its extension, or overridden with --in-format), and writes it back out as --out-format to --out.
+from its contents, falling back to its extension, or overridden with --in-format), and writes it
+back out as --out-format to --out.
+
+gzip and zstd input is detected from its leading bytes and decompressed transparently (override
+with --in-compression). Output is compressed when --out ends in .gz or .zst, or per
+--out-compression. A compressed input is decompressed once, up front (to memory, or to a temp file
+when large), so parallel decoding still works.
 
 Parquet and Arrow output are always a single file: internally each streams every batch of rows into
 it as its own row group (Parquet) or record batch (Arrow), keeping memory bounded to one batch
@@ -77,6 +89,10 @@ Parquet decode error always fail the run regardless of --max-row-errors.`,
 	cmd.Flags().StringVar(&flags.out, "out", "", "output file path (required)")
 	cmd.Flags().StringVar(&outFormat, "out-format", "json", "output format: json|parquet|csv|tsv|arrow")
 	cmd.Flags().StringVar(&flags.inFormat, "in-format", "", "override input format detection: json|parquet|csv|tsv|arrow")
+	cmd.Flags().StringVar(&flags.inCompression, "in-compression", "",
+		"override input compression detection: auto|none|gzip|zstd (default auto)")
+	cmd.Flags().StringVar(&flags.outCompression, "out-compression", "",
+		"output compression: auto|none|gzip|zstd (default auto: from --out's .gz/.zst extension)")
 	cmd.Flags().IntVar(&flags.readBufferSize, "read-buffer-size", 0, "read buffer size in bytes (0 = default)")
 	cmd.Flags().IntVar(&flags.batchSize, "batch-size", 0, "documents batched per dispatch (0 = default)")
 	cmd.Flags().IntVar(&flags.workers, "workers", 0, "number of concurrent decode workers (0 = default)")
@@ -115,6 +131,37 @@ func parseFormat(s string) (streamio.Format, error) {
 	default:
 		return "", fmt.Errorf("%w: %q", errUnknownFormat, s)
 	}
+}
+
+// parseCompression maps an --in-compression flag value onto a streamio.Compression.
+func parseCompression(s string) (streamio.Compression, error) {
+	switch strings.ToLower(s) {
+	case "", "auto":
+		return streamio.CompressionAuto, nil
+	case "none":
+		return streamio.CompressionNone, nil
+	case "gzip":
+		return streamio.CompressionGzip, nil
+	case "zstd":
+		return streamio.CompressionZstd, nil
+	default:
+		return "", fmt.Errorf("%w: %q", errUnknownCompression, s)
+	}
+}
+
+// detectFileFormat sniffs the format of the file at path from its contents.
+func detectFileFormat(path string) (streamio.Format, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	stat, err := f.Stat()
+	if err != nil {
+		return "", err
+	}
+	return streamio.DetectFormat(streamio.Source{Reader: f, Size: stat.Size(), Name: path})
 }
 
 // isCSVFamily reports whether f is CSV or TSV, the two formats --csv-delimiter/--csv-has-header
@@ -164,12 +211,24 @@ func buildConvertOptions(flags convertFlags, outFormat streamio.Format) ([]strea
 		opts = append(opts, streamio.WithInputFormat(inFormat))
 	}
 
+	if flags.inCompression != "" {
+		comp, err := parseCompression(flags.inCompression)
+		if err != nil {
+			return nil, fmt.Errorf("--in-compression: %w", err)
+		}
+		opts = append(opts, streamio.WithInputCompression(comp))
+	}
+
 	// csvOptions needs the input's actual format even when --in-format wasn't given, since
-	// --csv-has-header/--csv-delimiter must apply to an auto-detected CSV/TSV input too; detect it
-	// from --in the same way ProcessFile itself would.
+	// --csv-has-header/--csv-delimiter must apply to an auto-detected CSV/TSV input too; sniff it
+	// from --in's contents the same way ProcessFile itself would.
 	effectiveInFormat := inFormat
 	if effectiveInFormat == "" {
-		effectiveInFormat = streamio.DetectInputFormat(flags.in)
+		detected, err := detectFileFormat(flags.in)
+		if err != nil {
+			return nil, err
+		}
+		effectiveInFormat = detected
 	}
 
 	csvOpts, err := csvOptions(flags, effectiveInFormat, outFormat)
@@ -232,7 +291,7 @@ func runConvert(ctx context.Context, flags convertFlags, outFormatFlag string) (
 		return err
 	}
 
-	out, err := newFileWriter(flags.out)
+	out, err := newFileWriter(flags.out, flags.outCompression)
 	if err != nil {
 		return err
 	}

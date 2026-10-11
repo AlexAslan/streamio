@@ -19,37 +19,19 @@ type Source struct {
 
 // Config holds the options passed to Process.
 type Config struct {
-	// Logger receives ProcessFile diagnostics, when set.
-	Logger Logger
-	// Transformer changes each decoded record before it is encoded, when set.
-	Transformer Transformer
-	// OnRowErrorSkip, if set, is called once per row MaxRowErrors allows to be skipped, with the
-	// decode error that row raised. It must be safe for concurrent use: one decode worker per
-	// goroutine may call it.
-	OnRowErrorSkip func(err error)
-	// OptionErr is a deferred validation-error slot: an option func that fails validation stores
-	// its error here instead of panicking, and New's caller checks it once after every option has
-	// run.
-	OptionErr error
-	// InputFormat is the source file's format, or empty to detect it from the file extension.
-	InputFormat OutputFormat
-	// OutputFormat is the format documents are delivered in.
-	OutputFormat OutputFormat
-	// Run holds settings for the decode/dispatch pool, shared by every format.
-	Run RunConfig
-	// NDJSON holds settings only the NDJSON format reads.
-	NDJSON NDJSONConfig
-	// Parquet holds settings only the Parquet format reads.
-	Parquet ParquetConfig
-	// CSV holds settings the CSV and TSV formats read; the two differ only in CSV.Delimiter.
-	CSV CSVConfig
-	// MaxRowErrors caps how many rows may fail to decode and be skipped before the run fails,
-	// mirroring BigQuery's load-job max_bad_records: its zero value means fail immediately on the
-	// first row error, matching every version of streamio before this option existed. Only a
-	// decoder error that identifies itself as safely skippable (see formatio.RowError) counts
-	// against this cap — currently NDJSON and CSV/TSV field errors, not Parquet or a CSV/TSV syntax
-	// error, which always fail the run regardless of MaxRowErrors.
-	MaxRowErrors int
+	Transformer         Transformer
+	OptionErr           error
+	Logger              Logger
+	OnRowErrorSkip      func(err error)
+	InputFormat         OutputFormat
+	InputCompression    Compression
+	OutputFormat        OutputFormat
+	Run                 RunConfig
+	MaxDecompressedSize int64
+	NDJSON              NDJSONConfig
+	Parquet             ParquetConfig
+	MaxRowErrors        int
+	CSV                 CSVConfig
 }
 
 // RunConfig holds settings for the decode/dispatch pool that apply no matter which format is
@@ -142,7 +124,7 @@ func WithCSVHasHeader(b bool) Option {
 }
 
 // WithInputFormat sets the source file's format explicitly. Omitting it, or passing the zero
-// value, lets ProcessFile infer the input format from the file extension.
+// value, lets ProcessFile infer the input format from the file's contents.
 func WithInputFormat(f OutputFormat) Option {
 	return func(o *Config) { o.InputFormat = f }
 }

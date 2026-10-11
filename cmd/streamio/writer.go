@@ -2,10 +2,17 @@ package main
 
 import (
 	"bufio"
+	"compress/gzip"
 	"context"
 	"fmt"
+	"io"
 	"os"
+	"strings"
 	"sync"
+
+	"github.com/klauspost/compress/zstd"
+
+	"github.com/AlexAslan/streamio"
 )
 
 // fileWriterBufSize is the buffered writer's size: large enough that a 20,000-row NDJSON fixture
@@ -32,16 +39,79 @@ const fileWriterBufSize = 256 * 1024
 type fileWriter struct {
 	file *os.File
 	buf  *bufio.Writer
-	mu   sync.Mutex
+	// codec and fileBuf are set only for compressed output: buf feeds codec, which feeds fileBuf,
+	// which feeds file.
+	codec   io.Closer
+	fileBuf *bufio.Writer
+	mu      sync.Mutex
 }
 
-// newFileWriter creates (or truncates) path and returns a fileWriter appending to it.
-func newFileWriter(path string) (*fileWriter, error) {
+// outputCompression resolves --out-compression against path's extension: "" or "auto" follows the
+// extension (.gz/.gzip, .zst/.zstd), anything else is taken literally.
+func outputCompression(flag, path string) (streamio.Compression, error) {
+	switch strings.ToLower(flag) {
+	case "", "auto":
+		lower := strings.ToLower(path)
+		switch {
+		case strings.HasSuffix(lower, ".gz"), strings.HasSuffix(lower, ".gzip"):
+			return streamio.CompressionGzip, nil
+		case strings.HasSuffix(lower, ".zst"), strings.HasSuffix(lower, ".zstd"):
+			return streamio.CompressionZstd, nil
+		default:
+			return streamio.CompressionNone, nil
+		}
+	case "none":
+		return streamio.CompressionNone, nil
+	case "gzip":
+		return streamio.CompressionGzip, nil
+	case "zstd":
+		return streamio.CompressionZstd, nil
+	default:
+		return "", fmt.Errorf("%w: %q", errUnknownCompression, flag)
+	}
+}
+
+// newFileWriter creates (or truncates) path and returns a fileWriter appending to it, compressed
+// per --out-compression (or path's extension when that is auto).
+func newFileWriter(path, compressionFlag string) (*fileWriter, error) {
+	comp, err := outputCompression(compressionFlag, path)
+	if err != nil {
+		return nil, err
+	}
+
 	f, err := os.Create(path)
 	if err != nil {
 		return nil, fmt.Errorf("creating %s: %w", path, err)
 	}
-	return &fileWriter{file: f, buf: bufio.NewWriterSize(f, fileWriterBufSize)}, nil
+	if comp == streamio.CompressionNone {
+		return &fileWriter{file: f, buf: bufio.NewWriterSize(f, fileWriterBufSize)}, nil
+	}
+
+	fileBuf := bufio.NewWriterSize(f, fileWriterBufSize)
+	var codec interface {
+		io.Writer
+		io.Closer
+	}
+	switch comp {
+	case streamio.CompressionGzip:
+		codec = gzip.NewWriter(fileBuf)
+	case streamio.CompressionZstd:
+		zw, zerr := zstd.NewWriter(fileBuf)
+		if zerr != nil {
+			_ = f.Close()
+			return nil, fmt.Errorf("creating zstd writer for %s: %w", path, zerr)
+		}
+		codec = zw
+	default:
+		_ = f.Close()
+		return nil, fmt.Errorf("%w: %q", errUnknownCompression, string(comp))
+	}
+	return &fileWriter{
+		file:    f,
+		buf:     bufio.NewWriterSize(codec, fileWriterBufSize),
+		codec:   codec,
+		fileBuf: fileBuf,
+	}, nil
 }
 
 // write is the streamio.DocumentHandler.
@@ -57,10 +127,24 @@ func (w *fileWriter) close() error {
 	defer w.mu.Unlock()
 
 	if err := w.buf.Flush(); err != nil {
+		if w.codec != nil {
+			_ = w.codec.Close()
+		}
 		// Still attempt to close the file even if the flush failed, since a caller that only
 		// checks close's error should still see this one rather than the file leaking open.
 		_ = w.file.Close()
 		return fmt.Errorf("flushing %s: %w", w.file.Name(), err)
+	}
+	if w.codec != nil {
+		// The codec must write its trailer before the file buffer is flushed beneath it.
+		if err := w.codec.Close(); err != nil {
+			_ = w.file.Close()
+			return fmt.Errorf("compressing %s: %w", w.file.Name(), err)
+		}
+		if err := w.fileBuf.Flush(); err != nil {
+			_ = w.file.Close()
+			return fmt.Errorf("flushing %s: %w", w.file.Name(), err)
+		}
 	}
 	return w.file.Close()
 }

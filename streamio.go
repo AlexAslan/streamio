@@ -7,8 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
-	"strings"
 
 	"github.com/AlexAslan/streamio/internal/arrowio"
 	"github.com/AlexAslan/streamio/internal/csvio"
@@ -17,6 +15,7 @@ import (
 	"github.com/AlexAslan/streamio/internal/options"
 	"github.com/AlexAslan/streamio/internal/parquetio"
 	"github.com/AlexAslan/streamio/internal/pool"
+	"github.com/AlexAslan/streamio/internal/sniff"
 )
 
 // ErrNoConversionPath is returned when the requested output format can't be produced from the
@@ -84,24 +83,16 @@ func formatSupportFor(f options.OutputFormat) (formatSupport, bool) {
 	}
 }
 
-// DetectInputFormat returns the native format of the file at path, derived from its extension
-// (case-insensitive): any extension not named below means NDJSON. ProcessFile calls this itself
-// when WithInputFormat isn't given; it's exported so a caller that needs the format ahead of time
-// (for example, to build format-specific options before calling ProcessFile) can run the same
-// detection instead of duplicating or guessing at it.
+// DetectInputFormat returns the format a file's name suggests, from its extension alone (a
+// trailing .gz or .zst is ignored): any extension not named by a supported format means NDJSON.
+//
+// ProcessFile itself sniffs the contents instead; prefer DetectFormat when the file is at hand.
 func DetectInputFormat(path string) Format {
-	switch strings.ToLower(filepath.Ext(path)) {
-	case ".parquet":
-		return options.FormatParquet
-	case ".csv":
-		return options.FormatCSV
-	case ".tsv":
-		return options.FormatTSV
-	case ".arrow":
-		return options.FormatArrow
-	default:
-		return options.FormatJSON
+	name, _ := sniff.StripCompressionExt(path)
+	if f, ok := sniff.FormatFromExt(name); ok {
+		return f
 	}
+	return options.FormatJSON
 }
 
 // ProcessFile reads the file at path and calls handler once per document, delivering each one in
@@ -153,11 +144,15 @@ func ProcessReaderAt(
 		return Result{}, cfg.OptionErr
 	}
 	sink := options.DocumentHandler(handler)
-	in := cfg.InputFormat
-	if in == "" {
-		in = DetectInputFormat(src.Name)
-		cfg.InputFormat = in
+
+	// Resolves compression and format from the contents (decompressing first when needed), so every
+	// later stage sees a plain, random-access source and a definite input format.
+	src, release, err := openInput(ctx, src, &cfg)
+	if err != nil {
+		return Result{}, err
 	}
+	defer func() { _ = release() }()
+	in := cfg.InputFormat
 
 	// Requested output matches the input's own native format: raw passthrough, sending the
 	// input's bytes to the handler untouched with no decode, no encode, no intermediate record.
