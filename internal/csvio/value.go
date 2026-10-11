@@ -5,7 +5,7 @@ import (
 	"strconv"
 
 	"github.com/AlexAslan/streamio/internal/jsonio"
-	"github.com/AlexAslan/streamio/internal/record"
+	"github.com/AlexAslan/streamio/record"
 )
 
 // renderValue appends v's plain-text CSV/TSV rendering to dst and returns the extended slice, with

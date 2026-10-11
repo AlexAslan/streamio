@@ -3,12 +3,13 @@ package pool
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"time"
 
 	"github.com/AlexAslan/streamio/internal/formatio"
 	"github.com/AlexAslan/streamio/internal/options"
-	"github.com/AlexAslan/streamio/internal/record"
+	"github.com/AlexAslan/streamio/record"
 )
 
 // RunRecords runs the pool over the generic cross-format path: decode the input into canonical
@@ -49,13 +50,19 @@ func RunRecords(
 	rowErrors := formatio.NewRowErrorTracker(cfg.MaxRowErrors)
 
 	workers := make([]*recordWorker, len(decoders))
-	workers[0] = newRecordWorker(cfg, decoders[0], firstEnc, transformer, rowErrors)
+	workers[0], err = newRecordWorker(cfg, decoders[0], firstEnc, transformer, rowErrors)
+	if err != nil {
+		return options.Result{}, err
+	}
 	for i := 1; i < len(decoders); i++ {
 		enc, encErr := newEncoder()
 		if encErr != nil {
 			return options.Result{}, encErr
 		}
-		workers[i] = newRecordWorker(cfg, decoders[i], enc, transformer, rowErrors)
+		workers[i], err = newRecordWorker(cfg, decoders[i], enc, transformer, rowErrors)
+		if err != nil {
+			return options.Result{}, err
+		}
 	}
 
 	return run(ctx, cfg, len(workers),
@@ -88,22 +95,30 @@ type recordWorker struct {
 	rowErrors      *formatio.RowErrorTracker
 	onRowErrorSkip func(error)
 
+	// filters and transforms are this worker's own instances of the configured stages, built from
+	// their factories so each carries its own scratch.
+	filters    []options.RowFilter
+	transforms []options.RecordTransform
+	// arena backs the values transforms write, reset at the start of every batch.
+	arena record.Arena
+
 	// batch is the caller-owned batch the decoder refills, per formatio.RecordDecoder's contract.
 	// Its length is also the most rows a single encoded document can cover, for an encoder that
 	// renders a whole batch as one.
 	batch []record.Record
 }
 
-// newRecordWorker pairs one decoder with one encoder and sizes their shared batch. rowErrors is
-// shared across every worker RunRecords creates for the same run.
+// newRecordWorker pairs one decoder with one encoder, builds this worker's own filter and
+// transform instances, and sizes their shared batch. rowErrors is shared across every worker
+// RunRecords creates for the same run.
 func newRecordWorker(
 	cfg options.Config,
 	dec formatio.RecordDecoder,
 	enc formatio.RecordEncoder,
 	transformer options.Transformer,
 	rowErrors *formatio.RowErrorTracker,
-) *recordWorker {
-	return &recordWorker{
+) (*recordWorker, error) {
+	w := &recordWorker{
 		dec:            dec,
 		enc:            enc,
 		transformer:    transformer,
@@ -111,6 +126,22 @@ func newRecordWorker(
 		onRowErrorSkip: cfg.OnRowErrorSkip,
 		batch:          make([]record.Record, cfg.Run.BatchSize),
 	}
+
+	for _, newFilter := range cfg.RowFilters {
+		f, err := newFilter()
+		if err != nil {
+			return nil, fmt.Errorf("building row filter: %w", err)
+		}
+		w.filters = append(w.filters, f)
+	}
+	for _, newTransform := range cfg.RecordTransforms {
+		t, err := newTransform()
+		if err != nil {
+			return nil, fmt.Errorf("building record transform: %w", err)
+		}
+		w.transforms = append(w.transforms, t)
+	}
+	return w, nil
 }
 
 // decode pulls and encodes batches until the decoder is exhausted or ctx is cancelled, sending
@@ -125,11 +156,11 @@ func (w *recordWorker) decode(ctx context.Context, out chan<- [][]byte, stats *D
 		// into documents, which on this path is both halves.
 		readStart := time.Now()
 		n, decErr := w.decodeBatch(ctx, stats)
-		transformErr := w.transformBatch(n)
+		kept, transformErr := w.stageBatch(n, stats)
 		var docs [][]byte
 		var encErr error
 		if transformErr == nil {
-			docs, encErr = w.encodeBatch(n)
+			docs, encErr = w.encodeBatch(kept)
 		}
 		stats.ReadNs.Add(int64(time.Since(readStart)))
 
@@ -222,20 +253,70 @@ func (w *recordWorker) finalize(ctx context.Context, out chan<- [][]byte) error 
 	}
 }
 
-// transformBatch applies the configured record transform, when there is one, to the first n
-// records the decoder filled.
-func (w *recordWorker) transformBatch(n int) error {
-	if n == 0 || w.transformer == nil {
-		return nil
+// stageBatch runs the configured stages over the first n records the decoder filled — row filters
+// first, then record transforms, then the declarative rename/drop rules — and returns how many
+// records remain. Rejected records are compacted out by swapping, so every record's reusable
+// buffers stay in the batch for the decoder's next fill.
+func (w *recordWorker) stageBatch(n int, stats *DecodeStats) (int, error) {
+	// The previous batch has been encoded by now, so its transform output can be released.
+	w.arena.Reset()
+	if n == 0 {
+		return 0, nil
 	}
-	for i := range w.batch[:n] {
-		rec, err := w.transformer.Transform(w.batch[i])
+
+	kept := n
+	if len(w.filters) > 0 {
+		var err error
+		kept, err = w.filterBatch(n)
 		if err != nil {
-			return err
+			return 0, err
+		}
+		stats.RowsFiltered.Add(int64(n - kept))
+	}
+
+	for i := range w.batch[:kept] {
+		rec := w.batch[i]
+		for _, t := range w.transforms {
+			var err error
+			rec, err = t.Apply(rec, &w.arena)
+			if err != nil {
+				return 0, err
+			}
+		}
+		if w.transformer != nil {
+			var err error
+			rec, err = w.transformer.Transform(rec)
+			if err != nil {
+				return 0, err
+			}
 		}
 		w.batch[i] = rec
 	}
-	return nil
+	return kept, nil
+}
+
+// filterBatch drops every record any filter rejects from the first n, keeping the survivors in
+// order at the front of the batch, and returns how many survived.
+func (w *recordWorker) filterBatch(n int) (int, error) {
+	kept := 0
+	for i := range w.batch[:n] {
+		keep := true
+		for _, f := range w.filters {
+			ok, err := f.Keep(w.batch[i])
+			if err != nil {
+				return 0, err
+			}
+			if !ok {
+				keep = false
+				break
+			}
+		}
+		if keep {
+			w.batch[kept], w.batch[i] = w.batch[i], w.batch[kept]
+			kept++
+		}
+	}
+	return kept, nil
 }
 
 // encodeBatch hands the first n records the decoder filled to the encoder, as however many

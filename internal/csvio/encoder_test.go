@@ -7,7 +7,7 @@ import (
 	"github.com/AlexAslan/streamio/internal/csvio"
 	"github.com/AlexAslan/streamio/internal/formatio"
 	"github.com/AlexAslan/streamio/internal/options"
-	"github.com/AlexAslan/streamio/internal/record"
+	"github.com/AlexAslan/streamio/record"
 )
 
 // newEncoder builds a plain (non-streaming) encoder, failing the test if the constructor does.

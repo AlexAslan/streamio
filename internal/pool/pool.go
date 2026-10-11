@@ -104,6 +104,7 @@ func run(
 		Stats: options.Stats{
 			RowsRead:            rowsRead,
 			RowsSkipped:         stats.RowsSkipped.Load(),
+			RowsFiltered:        stats.RowsFiltered.Load(),
 			DocumentsDispatched: dispatched.Load(),
 			ReadDuration:        time.Duration(stats.ReadNs.Load()),
 			DispatchDuration:    time.Duration(dispatchNs.Load()),

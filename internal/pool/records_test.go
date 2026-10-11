@@ -13,7 +13,7 @@ import (
 	"github.com/AlexAslan/streamio/internal/formatio"
 	"github.com/AlexAslan/streamio/internal/options"
 	"github.com/AlexAslan/streamio/internal/pool"
-	"github.com/AlexAslan/streamio/internal/record"
+	"github.com/AlexAslan/streamio/record"
 )
 
 // countingDecoder yields total records numbered from a shared counter, so siblings handed out by

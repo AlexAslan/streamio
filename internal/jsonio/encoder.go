@@ -14,7 +14,7 @@ import (
 
 	"github.com/AlexAslan/streamio/internal/formatio"
 	"github.com/AlexAslan/streamio/internal/options"
-	"github.com/AlexAslan/streamio/internal/record"
+	"github.com/AlexAslan/streamio/record"
 )
 
 // errUnsupportedKind reports a record.Kind this encoder has no JSON representation for, which can

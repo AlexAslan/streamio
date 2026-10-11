@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/AlexAslan/streamio/internal/record"
+	"github.com/AlexAslan/streamio/record"
 )
 
 // Errors a JSON document can fail to decode with. They are deliberately specific about what this

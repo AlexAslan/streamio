@@ -59,6 +59,9 @@ frequent values:
 for every flag, including CSV/TSV delimiter and header options, batch/worker sizing, and
 `--max-row-errors`.
 
+Custom row filters, record transforms and record-level passes are available as an experimental
+library API: see [docs/stages.md](docs/stages.md).
+
 As a library:
 
 ```

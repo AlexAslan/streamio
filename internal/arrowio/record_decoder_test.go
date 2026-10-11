@@ -14,7 +14,7 @@ import (
 
 	"github.com/AlexAslan/streamio/internal/arrowio"
 	"github.com/AlexAslan/streamio/internal/formatio"
-	"github.com/AlexAslan/streamio/internal/record"
+	"github.com/AlexAslan/streamio/record"
 )
 
 // materialised is a decoded record copied out of the decoder's reusable buffers, so a whole file's

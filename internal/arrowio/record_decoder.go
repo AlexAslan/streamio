@@ -10,7 +10,7 @@ import (
 
 	"github.com/AlexAslan/streamio/internal/formatio"
 	"github.com/AlexAslan/streamio/internal/options"
-	"github.com/AlexAslan/streamio/internal/record"
+	"github.com/AlexAslan/streamio/record"
 )
 
 // columnMeta is one top-level column's schema-derived classification, looked up once per file

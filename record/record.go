@@ -1,12 +1,33 @@
 // Package record defines streamio's canonical, format-neutral row: the intermediate every
-// cross-format conversion goes through between a decoder and an encoder.
+// cross-format conversion goes through between a decoder and an encoder, and what a custom
+// pipeline stage reads and writes.
 //
 // A Record is a flat []Field of tagged-union Values, not a map[string]any, so decoding a scalar
 // column costs no heap allocation or interface boxing. KindMap and KindList are the two exceptions
 // that nest — a Parquet-style key/value column group, and an ordered JSON array, respectively;
 // everything else a decoder can't express in these Kinds is an error rather than an invented
 // representation.
+//
+// # Lifetime
+//
+// A Record and everything it references (Value.Str, Value.Map, Value.List, and the field names'
+// backing storage) belongs to the decoder that produced it and is reused for the next batch. Code
+// that receives one — a RowFilter, a RecordTransform, a RecordConsumer — may read it freely during
+// the call but must copy anything it wants to keep (string(v.Str), append([]byte(nil), v.Str...)).
+// A stage may replace a field's Value or truncate the Record it is handed, but must not retain a
+// slice into the Record after returning.
+//
+// # Stability
+//
+// This package is experimental: it is the first public commitment to the record model, and its API
+// may change in a v0 release if building real stages shows it needs to.
 package record
+
+import (
+	"strconv"
+
+	"github.com/AlexAslan/streamio/internal/textfmt"
+)
 
 // Kind is the physical type a Value carries. It selects which of Value's fixed fields holds the
 // data; every other field is unspecified and must not be read.
@@ -175,6 +196,62 @@ func (v Value) IsNull() bool {
 	return v.Kind == KindNull
 }
 
+// AppendText appends v's canonical text to dst, rendered exactly as the converters write it, and
+// reports whether v had a text to append.
+//
+// ok is false for a null, a zero-length string, and a KindMap or KindList (which have no scalar
+// text): such a value is "empty" for hashing, comparison and profiling purposes. -0 renders as 0 so
+// one number is one text, and a date or timestamp renders as ISO-8601 by its Semantic.
+func (v Value) AppendText(dst []byte) ([]byte, bool) {
+	switch v.Kind {
+	case KindBytes:
+		if len(v.Str) == 0 {
+			return dst, false
+		}
+		return append(dst, v.Str...), true
+	case KindBool:
+		return strconv.AppendBool(dst, v.Bool), true
+	case KindInt64:
+		return appendInt(dst, v), true
+	case KindFloat64:
+		f, bits := v.F64, textfmt.Bits64
+		if v.Semantic == SemanticFloat32 {
+			bits = textfmt.Bits32
+		}
+		if f == 0 {
+			f = 0 // folds -0 into 0: they are the same number
+		}
+		return textfmt.AppendFloat(dst, f, bits), true
+	case KindNull, KindMap, KindList:
+		return dst, false
+	}
+	return dst, false
+}
+
+// decimal is the radix every integer renders at.
+const decimal = 10
+
+// appendInt renders an integer the way its Semantic says it really is.
+func appendInt(dst []byte, v Value) []byte {
+	switch v.Semantic {
+	case SemanticDate:
+		return textfmt.AppendDate(dst, v.I64)
+	case SemanticTimestampMillis:
+		return textfmt.AppendTimestampMillis(dst, v.I64)
+	case SemanticTimestampMicros:
+		return textfmt.AppendTimestampMicros(dst, v.I64)
+	case SemanticTimestampNanos:
+		return textfmt.AppendTimestampNanos(dst, v.I64)
+	case SemanticUnsigned:
+		//nolint:gosec // SemanticUnsigned says the int64's bits are a uint64.
+		return strconv.AppendUint(dst, uint64(v.I64), decimal)
+	case SemanticNone, SemanticFloat32:
+		return strconv.AppendInt(dst, v.I64, decimal)
+	default:
+		return strconv.AppendInt(dst, v.I64, decimal)
+	}
+}
+
 // Field is one named column of a Record.
 type Field struct {
 	Name  string
@@ -205,4 +282,35 @@ func (r Record) Lookup(name string) (Value, bool) {
 		}
 	}
 	return Value{}, false
+}
+
+// Arena is batch-lived scratch memory a pipeline stage writes its output values into.
+//
+// A stage that replaces a field's bytes must put the new bytes somewhere that stays valid until the
+// batch is encoded. A single reused buffer does not: the next record's value would overwrite the
+// previous record's. The pool hands every worker one Arena and resets it at the start of each
+// batch, so everything copied into it lives exactly as long as the batch does.
+type Arena struct {
+	buf []byte
+}
+
+// Reset releases everything copied into a since the last Reset, keeping its capacity.
+func (a *Arena) Reset() {
+	a.buf = a.buf[:0]
+}
+
+// Copy copies b into the arena and returns the arena's copy.
+func (a *Arena) Copy(b []byte) []byte {
+	start := len(a.buf)
+	a.buf = append(a.buf, b...)
+	return a.buf[start:len(a.buf):len(a.buf)]
+}
+
+// Alloc returns n zeroed bytes from the arena, valid until the next Reset.
+func (a *Arena) Alloc(n int) []byte {
+	// Growing may move the arena's backing array. Slices handed out earlier keep pointing at the
+	// old array, which is still correct, so they stay valid; only later slices use the new one.
+	start := len(a.buf)
+	a.buf = append(a.buf, make([]byte, n)...)
+	return a.buf[start : start+n : start+n]
 }

@@ -7,7 +7,7 @@ import (
 	"github.com/AlexAslan/streamio/internal/formatio"
 	"github.com/AlexAslan/streamio/internal/options"
 	"github.com/AlexAslan/streamio/internal/parquetio"
-	"github.com/AlexAslan/streamio/internal/record"
+	"github.com/AlexAslan/streamio/record"
 )
 
 // genEncoderBenchRows builds n representative records — a mix of int/float/bool/string columns,

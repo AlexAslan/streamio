@@ -5,7 +5,7 @@ package options
 import (
 	"io"
 
-	"github.com/AlexAslan/streamio/internal/record"
+	"github.com/AlexAslan/streamio/record"
 )
 
 // Source is a sized, randomly-addressable byte source: what every format's chunked-parallel
@@ -20,6 +20,8 @@ type Source struct {
 // Config holds the options passed to Process.
 type Config struct {
 	Transformer         Transformer
+	RowFilters          []RowFilterFactory
+	RecordTransforms    []RecordTransformFactory
 	OptionErr           error
 	Logger              Logger
 	OnRowErrorSkip      func(err error)
@@ -90,6 +92,55 @@ type Option func(*Config)
 // formats match, since raw passthrough never decodes records and could not apply it.
 type Transformer interface {
 	Transform(record.Record) (record.Record, error)
+}
+
+// RowFilter decides, per decoded record, whether it continues down the pipeline. One instance
+// serves one decode worker, so an implementation may hold per-worker scratch without locking.
+type RowFilter interface {
+	// Keep reports whether rec is kept. It must not retain rec or anything it references.
+	Keep(rec record.Record) (bool, error)
+}
+
+// RecordTransform rewrites a decoded record before it is encoded. One instance serves one decode
+// worker, so an implementation may hold per-worker scratch without locking.
+type RecordTransform interface {
+	// Apply returns the record to encode in place of rec. It may modify rec in place or return a
+	// shortened view of it, but must not retain rec or anything it references after returning.
+	//
+	// Bytes the stage writes into rec must come from arena, which lives until the batch is
+	// encoded; a buffer the stage reuses between records would be overwritten by the next one.
+	Apply(rec record.Record, arena *record.Arena) (record.Record, error)
+}
+
+// RecordConsumer receives batches of decoded records without producing any output. One instance
+// serves one decode worker.
+type RecordConsumer interface {
+	// Consume reads batch. The records are reused for the next batch, so nothing may be retained.
+	Consume(batch []record.Record) error
+}
+
+// RowFilterFactory builds one RowFilter; it is called once per decode worker.
+type RowFilterFactory func() (RowFilter, error)
+
+// RecordTransformFactory builds one RecordTransform; it is called once per decode worker.
+type RecordTransformFactory func() (RecordTransform, error)
+
+// NeedsRecords reports whether any configured option works on decoded records, which rules out raw
+// passthrough: its bytes never become records, so those options would silently not apply.
+func (c Config) NeedsRecords() bool {
+	return c.Transformer != nil || len(c.RowFilters) > 0 || len(c.RecordTransforms) > 0
+}
+
+// WithRowFilter adds a row filter. Filters run in the order added, before any transform, and a row
+// any filter rejects is dropped.
+func WithRowFilter(f RowFilterFactory) Option {
+	return func(o *Config) { o.RowFilters = append(o.RowFilters, f) }
+}
+
+// WithRecordTransform adds a record transform. Transforms run in the order added, after every
+// filter and before the declarative rename/drop rules.
+func WithRecordTransform(f RecordTransformFactory) Option {
+	return func(o *Config) { o.RecordTransforms = append(o.RecordTransforms, f) }
 }
 
 // WithReadBufferSize sets the chunked readers' (NDJSON, CSV, TSV) read buffer size, in bytes.

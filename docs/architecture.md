@@ -1,5 +1,16 @@
 # Architecture
 
+## Pipeline stages
+
+Between decode and encode the generic path runs, per worker, any configured row filters
+(`WithRowFilter`), record transforms (`WithRecordTransform`) and the declarative rename/drop rules,
+in that order. Each worker builds its own stage instances from factories, so stages hold scratch
+without locking. Rejected records are compacted out of the batch by swapping, which keeps every
+record's reusable buffers in place for the decoder's next fill. A transform's output lives in a
+per-worker `record.Arena` reset at the start of each batch. `ConsumeFile` reuses the same pool with
+a consumer in place of the encoder, and `ProfileFile` is built on it. See
+[stages.md](stages.md) for the contract.
+
 ## Input detection
 
 Before routing, `ProcessFile` resolves two things from the file's first 4 KiB:
