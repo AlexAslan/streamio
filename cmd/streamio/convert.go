@@ -16,6 +16,9 @@ import (
 // errUnknownFormat is returned when --in-format or --out-format names an unsupported format.
 var errUnknownFormat = errors.New("unknown format: want json, parquet, csv, tsv, or arrow")
 
+// inCompressionHelp is the --in-compression usage text shared by convert and stats.
+const inCompressionHelp = "override input compression detection: auto|none|gzip|zstd|bzip2|xz|lz4|snappy|brotli"
+
 // errUnknownCompression is returned when --in-compression or --out-compression names an
 // unsupported compression.
 var errUnknownCompression = errors.New(
@@ -96,7 +99,7 @@ Parquet decode error always fail the run regardless of --max-row-errors.`,
 	cmd.Flags().StringVar(&outFormat, "out-format", "json", "output format: json|parquet|csv|tsv|arrow")
 	cmd.Flags().StringVar(&flags.inFormat, "in-format", "", "override input format detection: json|parquet|csv|tsv|arrow")
 	cmd.Flags().StringVar(&flags.inCompression, "in-compression", "",
-		"override input compression detection: auto|none|gzip|zstd|bzip2|xz|lz4|snappy|brotli")
+		inCompressionHelp)
 	cmd.Flags().StringVar(&flags.outCompression, "out-compression", "",
 		"output compression: auto|none|gzip|zstd|xz|lz4|snappy|brotli (default auto: from --out's extension)")
 	cmd.Flags().IntVar(&flags.readBufferSize, "read-buffer-size", 0, "read buffer size in bytes (0 = default)")
@@ -214,6 +217,43 @@ func csvOptions(flags convertFlags, inFormat, outFormat streamio.Format) ([]stre
 	return opts, nil
 }
 
+// readSizes holds the input-side tuning flags convert and stats share.
+type readSizes struct {
+	readBufferSize int
+	batchSize      int
+	chunkSize      int
+	maxOpenReaders int
+	maxRowErrors   int
+}
+
+// readOptions turns readSizes into the options common to every command that reads a file. Zero
+// values leave the library's own defaults in place.
+func readOptions(r readSizes) ([]streamio.Option, error) {
+	var opts []streamio.Option
+	if r.readBufferSize > 0 {
+		opts = append(opts, streamio.WithReadBufferSize(r.readBufferSize))
+	}
+	if r.batchSize > 0 {
+		opts = append(opts, streamio.WithBatchSize(r.batchSize))
+	}
+	if r.chunkSize > 0 {
+		opts = append(opts, streamio.WithChunkSize(r.chunkSize))
+	}
+	if r.maxOpenReaders > 0 {
+		opts = append(opts, streamio.WithMaxOpenReaders(r.maxOpenReaders))
+	}
+
+	if r.maxRowErrors < 0 {
+		return nil, fmt.Errorf("%w: got %d", errNegativeMaxRowErrors, r.maxRowErrors)
+	}
+	if r.maxRowErrors > 0 {
+		opts = append(opts, streamio.WithMaxRowErrors(r.maxRowErrors, func(err error) {
+			fmt.Fprintf(os.Stderr, "skipping row: %v\n", err)
+		}))
+	}
+	return opts, nil
+}
+
 // buildConvertOptions turns flags and outFormat into the streamio.Options ProcessFile needs.
 func buildConvertOptions(flags convertFlags, outFormat streamio.Format) ([]streamio.Option, error) {
 	opts := []streamio.Option{streamio.WithOutputFormat(outFormat)}
@@ -253,18 +293,17 @@ func buildConvertOptions(flags convertFlags, outFormat streamio.Format) ([]strea
 	}
 	opts = append(opts, csvOpts...)
 
-	if flags.readBufferSize > 0 {
-		opts = append(opts, streamio.WithReadBufferSize(flags.readBufferSize))
+	readOpts, err := readOptions(readSizes{
+		readBufferSize: flags.readBufferSize,
+		batchSize:      flags.batchSize,
+		chunkSize:      flags.chunkSize,
+		maxOpenReaders: flags.maxOpenReaders,
+		maxRowErrors:   flags.maxRowErrors,
+	})
+	if err != nil {
+		return nil, err
 	}
-	if flags.batchSize > 0 {
-		opts = append(opts, streamio.WithBatchSize(flags.batchSize))
-	}
-	if flags.chunkSize > 0 {
-		opts = append(opts, streamio.WithChunkSize(flags.chunkSize))
-	}
-	if flags.maxOpenReaders > 0 {
-		opts = append(opts, streamio.WithMaxOpenReaders(flags.maxOpenReaders))
-	}
+	opts = append(opts, readOpts...)
 
 	// A single Parquet or Arrow writer can't be driven by more than one goroutine, so single-file
 	// streaming output forces one decode worker regardless of --workers; see WithSingleFileOutput's
@@ -280,15 +319,6 @@ func buildConvertOptions(flags convertFlags, outFormat streamio.Format) ([]strea
 		opts = append(opts, streamio.WithSingleFileOutput(true), streamio.WithParallelWorkers(1))
 	} else if flags.workers > 0 {
 		opts = append(opts, streamio.WithParallelWorkers(flags.workers))
-	}
-
-	if flags.maxRowErrors < 0 {
-		return nil, fmt.Errorf("%w: got %d", errNegativeMaxRowErrors, flags.maxRowErrors)
-	}
-	if flags.maxRowErrors > 0 {
-		opts = append(opts, streamio.WithMaxRowErrors(flags.maxRowErrors, func(err error) {
-			fmt.Fprintf(os.Stderr, "skipping row: %v\n", err)
-		}))
 	}
 
 	return opts, nil

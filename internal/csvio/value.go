@@ -40,19 +40,17 @@ func renderValue(dst []byte, v record.Value) ([]byte, error) {
 const decimalBase = 10
 
 // renderInt appends an integer value to dst as whatever its Semantic says it really is, matching
-// jsonio's own writeInt rendering choices for each semantic. The timestamp/date renderers return
-// a string rather than appending, since they format through time.Time.Format; that string is
-// still only one allocation, the same as before this change.
+// jsonio's own writeInt rendering choices for each semantic.
 func renderInt(dst []byte, v record.Value) []byte {
 	switch v.Semantic {
 	case record.SemanticDate:
-		return append(dst, jsonio.Date(v.I64)...)
+		return jsonio.AppendDate(dst, v.I64)
 	case record.SemanticTimestampMillis:
-		return append(dst, jsonio.TimestampMillis(v.I64)...)
+		return jsonio.AppendTimestampMillis(dst, v.I64)
 	case record.SemanticTimestampMicros:
-		return append(dst, jsonio.TimestampMicros(v.I64)...)
+		return jsonio.AppendTimestampMicros(dst, v.I64)
 	case record.SemanticTimestampNanos:
-		return append(dst, jsonio.TimestampNanos(v.I64)...)
+		return jsonio.AppendTimestampNanos(dst, v.I64)
 	case record.SemanticUnsigned:
 		//nolint:gosec // Deliberate: SemanticUnsigned means the I64 bits are a uint64.
 		return strconv.AppendUint(dst, uint64(v.I64), decimalBase)

@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"text/tabwriter"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/spf13/cobra"
@@ -23,10 +25,13 @@ const (
 	tablePadding         = 2
 	outputTable          = "table"
 	outputJSON           = "json"
+
+	// tinyPct is the share below which a non-zero percentage would print as 0.0%.
+	tinyPct = 0.05
 )
 
-// errNegativeTop is returned when --top is negative.
-var errNegativeTop = errors.New("--top must not be negative")
+// errInvalidTop is returned when --top is below 1.
+var errInvalidTop = errors.New("--top must be at least 1")
 
 // errUnknownStatsOutput is returned when --output names an unsupported rendering.
 var errUnknownStatsOutput = errors.New("unknown output: want table or json")
@@ -56,20 +61,25 @@ func getStatsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "stats",
 		Short: "Profile a document file: record count, per-attribute fill rate, and top values",
-		Long: `Stats reads --in in one pass (decompressing gzip and zstd input transparently) and reports the
-total record count and, for every attribute, how many records have a non-empty value (and what
-share of all records that is), how many distinct values it holds, and its --top most frequent
-values with their counts and shares.
+		Long: `Stats reads --in in one pass and reports the total record count and, for every attribute,
+how many records have a non-empty value (and what share of all records that is), how many distinct
+values it holds, and its --top most frequent values with their counts and shares. Compressed input
+is detected and decompressed transparently.
 
-An attribute is empty when it is missing, null, or a zero-length string; whitespace is not empty.
-Nested Parquet map entries are reported as dotted paths (attrs.key).
+An attribute is empty when it is missing, null, a zero-length string, or an empty list; whitespace
+is not empty. Nested entries are reported as dotted paths (attrs.key), a list counts as the single
+value [list], and an attribute repeated within one record counts once. A value is counted by the
+text it renders as, so the number 1 and the string "1" are one value. CSV and TSV have no header
+unless --csv-has-header is given, in which case the first row names the columns.
 
-Counting distinct values costs memory in proportion to how many there are, so each attribute stops
-adding new distinct values after --max-distinct. Fill rates stay exact; an attribute past the cap is
-marked approximate (distinct and value counts are then lower bounds).
+Counting distinct values costs memory in proportion to how many there are, so each decode worker
+tracks at most --max-distinct values per attribute exactly. Past that it keeps approximate counts of
+the most frequent values instead: the attribute is marked with + in the table, its counts are
+estimates, and ~ marks a count that may be off. Non-empty counts and percentages stay exact.
 
-Column order is first-seen. With --workers above 1 and NDJSON records whose keys differ from row to
-row, that order can vary between runs.`,
+Columns appear in first-seen order. With --workers above 1 and NDJSON whose keys differ from record
+to record, that order can vary between runs. A file under one chunk (32 MiB by default) is read by
+a single worker; lower --chunk-size to spread a smaller file across workers.`,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runStats(cmd.Context(), os.Stdout, flags)
@@ -78,13 +88,13 @@ row, that order can vary between runs.`,
 
 	cmd.Flags().StringVar(&flags.in, "in", "", "input file path (required)")
 	cmd.Flags().StringVar(&flags.inFormat, "in-format", "", "override input format detection: json|parquet|csv|tsv|arrow")
-	cmd.Flags().StringVar(&flags.inCompression, "in-compression", "",
-		"override input compression detection: auto|none|gzip|zstd")
+	cmd.Flags().StringVar(&flags.inCompression, "in-compression", "", inCompressionHelp)
 	cmd.Flags().StringVar(&flags.output, "output", outputTable, "output rendering: table|json")
-	cmd.Flags().IntVar(&flags.top, "top", defaultStatsTop, "most frequent values to show per attribute")
+	cmd.Flags().IntVar(&flags.top, "top", defaultStatsTop, "most frequent values to show per attribute (at least 1)")
 	cmd.Flags().IntVar(&flags.maxDistinct, "max-distinct", 0,
-		"distinct values counted per attribute before it is marked approximate (0 = default 100000)")
-	cmd.Flags().StringSliceVar(&flags.columns, "columns", nil, "only profile these attributes (comma-separated)")
+		"distinct values tracked exactly per attribute per worker (0 = default 100000)")
+	cmd.Flags().StringSliceVar(&flags.columns, "columns", nil,
+		"only profile these attributes and what is nested under them (comma-separated)")
 	cmd.Flags().IntVar(&flags.maxValueWidth, "max-value-width", defaultMaxValueWidth,
 		"truncate displayed values to this many characters")
 	cmd.Flags().IntVar(&flags.workers, "workers", 0, "number of concurrent decode workers (0 = default)")
@@ -107,16 +117,16 @@ row, that order can vary between runs.`,
 
 // buildStatsOptions turns flags into the streamio.Options ProfileFile needs.
 func buildStatsOptions(flags statsFlags) ([]streamio.Option, error) {
-	var opts []streamio.Option
-
-	var inFormat streamio.Format
+	var (
+		opts     []streamio.Option
+		inFormat streamio.Format
+	)
 	if flags.inFormat != "" {
 		var err error
 		inFormat, err = parseFormat(flags.inFormat)
 		if err != nil {
 			return nil, fmt.Errorf("--in-format: %w", err)
 		}
-		opts = append(opts, streamio.WithInputFormat(inFormat))
 	} else {
 		// Sniffed from the contents, like convert, so CSV options apply to a mislabeled file too.
 		detected, err := detectFileFormat(flags.in)
@@ -125,6 +135,8 @@ func buildStatsOptions(flags statsFlags) ([]streamio.Option, error) {
 		}
 		inFormat = detected
 	}
+	// Pinned so the library doesn't sniff the same bytes a second time.
+	opts = append(opts, streamio.WithInputFormat(inFormat))
 
 	if flags.inCompression != "" {
 		comp, err := parseCompression(flags.inCompression)
@@ -144,12 +156,20 @@ func buildStatsOptions(flags statsFlags) ([]streamio.Option, error) {
 	}
 	opts = append(opts, csvOpts...)
 
-	if flags.top < 0 {
-		return nil, fmt.Errorf("%w: got %d", errNegativeTop, flags.top)
+	if flags.top < 1 {
+		return nil, fmt.Errorf("%w: got %d", errInvalidTop, flags.top)
 	}
-	if flags.maxRowErrors < 0 {
-		return nil, fmt.Errorf("%w: got %d", errNegativeMaxRowErrors, flags.maxRowErrors)
+
+	readOpts, err := readOptions(readSizes{
+		batchSize:      flags.batchSize,
+		chunkSize:      flags.chunkSize,
+		maxOpenReaders: flags.maxOpenReader,
+		maxRowErrors:   flags.maxRowErrors,
+	})
+	if err != nil {
+		return nil, err
 	}
+	opts = append(opts, readOpts...)
 
 	opts = append(opts, streamio.WithProfileTopN(flags.top), streamio.WithProfileMaxDistinct(flags.maxDistinct))
 	if len(flags.columns) > 0 {
@@ -157,20 +177,6 @@ func buildStatsOptions(flags statsFlags) ([]streamio.Option, error) {
 	}
 	if flags.workers > 0 {
 		opts = append(opts, streamio.WithParallelWorkers(flags.workers))
-	}
-	if flags.batchSize > 0 {
-		opts = append(opts, streamio.WithBatchSize(flags.batchSize))
-	}
-	if flags.chunkSize > 0 {
-		opts = append(opts, streamio.WithChunkSize(flags.chunkSize))
-	}
-	if flags.maxOpenReader > 0 {
-		opts = append(opts, streamio.WithMaxOpenReaders(flags.maxOpenReader))
-	}
-	if flags.maxRowErrors > 0 {
-		opts = append(opts, streamio.WithMaxRowErrors(flags.maxRowErrors, func(err error) {
-			fmt.Fprintf(os.Stderr, "skipping row: %v\n", err)
-		}))
 	}
 	return opts, nil
 }
@@ -199,19 +205,59 @@ func runStats(ctx context.Context, w io.Writer, flags statsFlags) error {
 		return fmt.Errorf("profiling %s: %w", flags.in, err)
 	}
 
+	for _, name := range missingColumns(flags.columns, prof) {
+		fmt.Fprintf(os.Stderr, "warning: --columns %q matched no attribute\n", name)
+	}
+
 	if flags.output == outputJSON {
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
-		return enc.Encode(prof)
+		return enc.Encode(jsonSafe(prof))
 	}
 	return renderStatsTable(w, flags.in, prof, flags.maxValueWidth)
+}
+
+// missingColumns returns the requested --columns that produced no attribute in prof.
+func missingColumns(requested []string, prof streamio.Profile) []string {
+	var missing []string
+	for _, want := range requested {
+		found := false
+		for _, c := range prof.Columns {
+			if c.Name == want || strings.HasPrefix(c.Name, want+".") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			missing = append(missing, want)
+		}
+	}
+	return missing
+}
+
+// jsonSafe returns prof with every value that isn't valid UTF-8 quoted: encoding/json would turn
+// each invalid byte into U+FFFD, making different binary values print identically.
+func jsonSafe(prof streamio.Profile) streamio.Profile {
+	out := prof
+	out.Columns = make([]streamio.ColumnStats, len(prof.Columns))
+	for i, c := range prof.Columns {
+		out.Columns[i] = c
+		out.Columns[i].TopValues = make([]streamio.ValueCount, len(c.TopValues))
+		for j, v := range c.TopValues {
+			if !utf8.ValidString(v.Value) {
+				v.Value = strconv.Quote(v.Value)
+			}
+			out.Columns[i].TopValues[j] = v
+		}
+	}
+	return out
 }
 
 // renderStatsTable writes prof as a summary table followed by each attribute's top values.
 func renderStatsTable(w io.Writer, path string, prof streamio.Profile, maxWidth int) error {
 	tw := tabwriter.NewWriter(w, 0, 0, tablePadding, ' ', 0)
 
-	fmt.Fprintf(tw, "file:\t%s\n", path)
+	fmt.Fprintf(tw, "file:\t%s\n", display(path, maxWidth))
 	fmt.Fprintf(tw, "records:\t%d\n", prof.Records)
 	if prof.RowsSkipped > 0 {
 		fmt.Fprintf(tw, "skipped:\t%d\n", prof.RowsSkipped)
@@ -224,36 +270,49 @@ func renderStatsTable(w io.Writer, path string, prof streamio.Profile, maxWidth 
 		if !c.DistinctExact {
 			approx = "+"
 		}
-		fmt.Fprintf(tw, "%s\t%d\t%.1f%%\t%d%s\n",
-			truncate(c.Name, maxWidth), c.NonEmpty, c.Pct, c.Distinct, approx)
+		fmt.Fprintf(tw, "%s\t%d\t%s\t%d%s\n", display(c.Name, maxWidth), c.NonEmpty, formatPct(c.Pct), c.Distinct, approx)
 	}
 
 	for _, c := range prof.Columns {
 		if len(c.TopValues) == 0 {
 			continue
 		}
-		fmt.Fprintf(tw, "\ntop values of %s", truncate(c.Name, maxWidth))
+		fmt.Fprintf(tw, "\ntop values of %s", display(c.Name, maxWidth))
 		if !c.DistinctExact {
-			fmt.Fprint(tw, " (approximate: distinct cap reached)")
+			fmt.Fprint(tw, " (approximate: distinct limit reached)")
 		}
 		fmt.Fprintln(tw, ":")
 		for _, v := range c.TopValues {
-			fmt.Fprintf(tw, "  %s\t%d\t%.1f%%\n", truncate(quoteIfBlank(v.Value), maxWidth), v.Count, v.Pct)
+			count := strconv.FormatInt(v.Count, 10)
+			if v.MaxError > 0 {
+				count = "~" + count
+			}
+			fmt.Fprintf(tw, "  %s\t%s\t%s\n", display(v.Value, maxWidth), count, formatPct(v.Pct))
 		}
 	}
 
 	if prof.ColumnsTruncated {
-		fmt.Fprintln(tw, "\nnote: more attributes exist than are tracked; the rest were left out")
+		fmt.Fprintln(tw, "\nnote: more attributes exist than are reported; the rest were left out")
 	}
 	return tw.Flush()
 }
 
-// quoteIfBlank makes whitespace-only values visible, since "empty" ones are never listed.
-func quoteIfBlank(s string) string {
-	if strings.TrimSpace(s) == "" {
-		return fmt.Sprintf("%q", s)
+// formatPct renders a 0–100 percentage, keeping a tiny non-zero share from reading as zero.
+func formatPct(p float64) string {
+	if p > 0 && p < tinyPct {
+		return "<0.1%"
 	}
-	return s
+	return fmt.Sprintf("%.1f%%", p)
+}
+
+// display makes s safe to print in one table cell: a value holding control characters or invalid
+// UTF-8, or nothing but whitespace, is shown quoted, and anything longer than maxWidth is cut.
+func display(s string, maxWidth int) string {
+	if !utf8.ValidString(s) || strings.IndexFunc(s, unicode.IsControl) >= 0 ||
+		(s != "" && strings.TrimSpace(s) == "") {
+		s = strconv.Quote(s)
+	}
+	return truncate(s, maxWidth)
 }
 
 // truncate shortens s to at most n characters, ending with an ellipsis; n<=0 means no limit.

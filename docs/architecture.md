@@ -149,6 +149,14 @@ The pool already builds one encoder per decode worker, so each worker aggregates
 Row-error handling, transforms and worker splitting all come from the pool unchanged.
 
 Counting avoids allocation once a value has been seen: lookups use `m[string(b)]`, which the
-compiler does not allocate for, and each map entry holds a `*int64` so a repeat sighting
-increments in place. Only a first-seen value copies its key. Each attribute stops adding new
-distinct values at `WithProfileMaxDistinct`, which bounds memory on high-cardinality columns.
+compiler does not allocate for, and each map entry is a pointer so a repeat sighting increments in
+place. Numbers and dates render into a reused scratch buffer through `jsonio`'s append helpers.
+Only a first-seen value copies its key, and flat records resolve each field's column from a
+per-position cache instead of hashing its path.
+
+Memory is bounded per attribute by `WithProfileMaxDistinct`. A column counts exactly until it holds
+that many distinct values, then switches to Space-Saving: the least-counted value is evicted for
+each newcomer, which inherits that count, so frequent values always survive and a tracked value is
+never under-counted. Each worker's eviction floor is kept so `Merge` can report, per value, how far
+an estimate may be off (`ValueCount.MaxError`). `Merge` adopts the first worker's maps instead of
+copying them and selects the top values with a bounded heap, so it costs O(distinct · log topN).

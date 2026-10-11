@@ -3,12 +3,14 @@ package streamio_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 
+	parquetgo "github.com/AlexAslan/parquet-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -245,4 +247,117 @@ func TestProfileFile_CompressedAndMislabeledInput(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), csv.Records)
 	assert.Equal(t, int64(1), byName(csv)["name"].NonEmpty)
+}
+
+type typedParquetRow struct {
+	Attributes map[string]string `parquet:"attributes"`
+	Name       string            `parquet:"name"`
+	TSMillis   int64             `parquet:"ts_millis,timestamp"`
+	Day        int32             `parquet:"day,date"`
+	Score      float64           `parquet:"score"`
+}
+
+// TestProfileFile_ParquetTemporalsAndMapsMatchTheirTextRendering checks typed Parquet columns are
+// profiled under the text the converters would write, and map entries under dotted paths.
+func TestProfileFile_ParquetTemporalsAndMapsMatchTheirTextRendering(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "typed.parquet")
+	f, err := os.Create(path)
+	require.NoError(t, err)
+	w := parquetgo.NewGenericWriter[typedParquetRow](f)
+	_, err = w.Write([]typedParquetRow{
+		{Name: "a", TSMillis: 1_704_067_200_000, Day: 19723, Score: 1_000_000, Attributes: map[string]string{"k": "v"}},
+		{Name: "b", TSMillis: 1_704_067_200_000, Day: 19723, Score: 1_000_000, Attributes: map[string]string{"k": "v"}},
+	})
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+	require.NoError(t, f.Close())
+
+	p, err := streamio.ProfileFile(context.Background(), path)
+	require.NoError(t, err)
+
+	got := byName(p)
+	assert.Equal(t, "2024-01-01", got["day"].TopValues[0].Value)
+	assert.Equal(t, "2024-01-01T00:00:00.000Z", got["ts_millis"].TopValues[0].Value)
+	assert.Equal(t, "1000000", got["score"].TopValues[0].Value)
+	assert.Equal(t, int64(2), got["attributes.k"].NonEmpty)
+	assert.Equal(t, "v", got["attributes.k"].TopValues[0].Value)
+}
+
+func TestProfileFile_AllEmptyColumnIsReported(t *testing.T) {
+	t.Parallel()
+
+	path := writeTemp(t, "in.csv", []byte("a,b\n1,\n2,\n"))
+	p, err := streamio.ProfileFile(context.Background(), path, streamio.WithCSVHasHeader(true))
+	require.NoError(t, err)
+
+	require.Len(t, p.Columns, 2)
+	assert.Equal(t, "a", p.Columns[0].Name)
+	assert.Equal(t, "b", p.Columns[1].Name)
+	assert.Zero(t, p.Columns[1].NonEmpty)
+}
+
+func TestProfileFile_DuplicateHeaderNeverExceedsRecords(t *testing.T) {
+	t.Parallel()
+
+	path := writeTemp(t, "in.csv", []byte("a,a\n1,2\n3,4\n"))
+	p, err := streamio.ProfileFile(context.Background(), path, streamio.WithCSVHasHeader(true))
+	require.NoError(t, err)
+
+	require.Len(t, p.Columns, 1)
+	assert.Equal(t, int64(2), p.Records)
+	assert.Equal(t, int64(2), p.Columns[0].NonEmpty)
+	assert.InDelta(t, 100.0, p.Columns[0].Pct, 1e-9)
+}
+
+func TestProfileFile_ColumnFilterIncludesNestedEntries(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "typed.parquet")
+	f, err := os.Create(path)
+	require.NoError(t, err)
+	w := parquetgo.NewGenericWriter[typedParquetRow](f)
+	_, err = w.Write([]typedParquetRow{{Name: "a", Attributes: map[string]string{"k": "v", "j": "w"}}})
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+	require.NoError(t, f.Close())
+
+	p, err := streamio.ProfileFile(context.Background(), path, streamio.WithProfileColumns("attributes"))
+	require.NoError(t, err)
+
+	got := byName(p)
+	assert.Contains(t, got, "attributes.k")
+	assert.Contains(t, got, "attributes.j")
+	assert.NotContains(t, got, "name")
+}
+
+// TestProfileFile_DistinctCapIsGlobalToTheResult checks that how many workers share the file does
+// not change which value wins once the limit is exceeded.
+func TestProfileFile_DistinctCapKeepsTheDominantValueAtAnyWorkerCount(t *testing.T) {
+	t.Parallel()
+
+	var sb strings.Builder
+	for i := range 3000 {
+		fmt.Fprintf(&sb, "{\"k\":\"rare-%d\"}\n", i)
+	}
+	for range 6000 {
+		sb.WriteString("{\"k\":\"HOT\"}\n")
+	}
+	path := writeTemp(t, "skew.ndjson", []byte(sb.String()))
+
+	for _, workers := range []int{1, 4} {
+		p, err := streamio.ProfileFile(context.Background(), path,
+			streamio.WithProfileMaxDistinct(50),
+			streamio.WithParallelWorkers(workers),
+			streamio.WithChunkSize(16*1024))
+		require.NoError(t, err)
+
+		k := byName(p)["k"]
+		assert.Equal(t, int64(9000), k.NonEmpty, "workers=%d", workers)
+		assert.False(t, k.DistinctExact, "workers=%d", workers)
+		require.NotEmpty(t, k.TopValues, "workers=%d", workers)
+		assert.Equal(t, "HOT", k.TopValues[0].Value, "workers=%d", workers)
+		assert.GreaterOrEqual(t, k.TopValues[0].Count, int64(6000), "workers=%d", workers)
+	}
 }

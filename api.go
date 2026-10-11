@@ -159,14 +159,14 @@ func WithProfileTopN(n int) Option {
 	return options.WithProfileTopN(n)
 }
 
-// WithProfileMaxDistinct caps how many distinct values ProfileFile counts per attribute, bounding
-// memory on high-cardinality columns. n<=0 falls back to the default of 100,000.
+// WithProfileMaxDistinct caps how many distinct values each decode worker counts exactly per
+// attribute, bounding memory on high-cardinality columns. n<=0 falls back to the default of 100,000.
 func WithProfileMaxDistinct(n int) Option {
 	return options.WithProfileMaxDistinct(n)
 }
 
-// WithProfileColumns restricts ProfileFile to the named attribute paths (nested map entries are
-// addressed with dots, like WithTransforms).
+// WithProfileColumns restricts ProfileFile to the named attributes and everything nested under
+// them, addressing nested map entries with dots like WithTransforms.
 func WithProfileColumns(names ...string) Option {
 	return options.WithProfileColumns(names...)
 }

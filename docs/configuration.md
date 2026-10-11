@@ -20,16 +20,28 @@
 
 ## Profiling (`ProfileFile` / `ProfileReaderAt`)
 
-These read the same input options as `ProcessFile` (`WithInputFormat`, `WithCSVHasHeader`,
-`WithParallelWorkers`, `WithTransforms`, `WithMaxRowErrors`, ...) and ignore the output options.
+These read the same input options as `ProcessFile` (`WithInputFormat`, `WithInputCompression`,
+`WithCSVHasHeader`, `WithParallelWorkers`, `WithTransforms`, `WithMaxRowErrors`, ...) and ignore the
+output options.
 
 | Option | Default | Effect |
 |---|---|---|
 | `WithProfileTopN(n)` | `10` | Most frequent values kept per attribute. |
-| `WithProfileMaxDistinct(n)` | `100000` | Distinct values counted per attribute. Past it the attribute is marked `DistinctExact == false`; non-empty counts stay exact. |
-| `WithProfileColumns(names...)` | all | Restrict the profile to these attribute paths (dotted for nested map entries). |
+| `WithProfileMaxDistinct(n)` | `100000` | Distinct values each decode worker tracks exactly per attribute. Past it the attribute switches to approximate heavy-hitter counting: `DistinctExact` is `false`, `Distinct` is a lower bound, and top-value counts are estimates bounded by `ValueCount.MaxError`. Non-empty counts stay exact. |
+| `WithProfileColumns(names...)` | all | Restrict the profile to these attributes and everything nested under them (`attributes` also selects `attributes.k`). |
 
-An attribute is *empty* when it is missing, null, or a zero-length string; whitespace is not empty.
+What a profile counts:
+
+- An attribute is *empty* when it is missing, null, a zero-length string, or an empty list.
+  Whitespace is not empty, and neither is the text `NULL` in a CSV (CSV has no null).
+- Nested map entries are named by dotted path. An attribute repeated within one record counts once,
+  from its first occurrence, so non-empty never exceeds the record count.
+- A value counts under the text it renders as, using the converters' own formatting: the number
+  `1`, the float `1.0` and the string `"1"` are one value, a date renders as `2024-01-01`, and a
+  list counts under the single value `[list]`.
+- Columns appear in first-seen order. NDJSON whose keys differ between records can reorder
+  between runs when more than one worker is used.
+- At most 4096 attributes are reported; `ColumnsTruncated` says when more existed.
 
 `n <= 0` means "use the default" for any numeric option. Zero `Format` means `FormatJSON`.
 

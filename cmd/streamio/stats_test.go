@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/AlexAslan/streamio"
 )
 
 const statsCLIFixture = "id,country,note\n1,US,a\n2,US,\n3,GR,b\n4,,c\n"
@@ -95,9 +97,11 @@ func TestRunStats_RejectsBadFlags(t *testing.T) {
 		t.Errorf("--output yaml: err = %v, want errUnknownStatsOutput", err)
 	}
 
-	err = runStats(context.Background(), &out, statsFlags{in: in, output: "table", top: -1})
-	if err == nil {
-		t.Error("--top -1: want an error")
+	for _, top := range []int{-1, 0} {
+		err = runStats(context.Background(), &out, statsFlags{in: in, output: "table", top: top})
+		if !errors.Is(err, errInvalidTop) {
+			t.Errorf("--top %d: err = %v, want errInvalidTop", top, err)
+		}
 	}
 
 	err = runStats(context.Background(), &out, statsFlags{in: in, output: "table", inFormat: "xml"})
@@ -151,5 +155,77 @@ func TestRunStats_GzippedAndMislabeledInput(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "75.0%") {
 		t.Errorf("table output missing the country fill rate:\n%s", out.String())
+	}
+}
+
+func TestDisplay(t *testing.T) {
+	for _, tc := range []struct {
+		in    string
+		want  string
+		width int
+	}{
+		{"plain", "plain", 40},
+		{"has\ttab", `"has\ttab"`, 40},
+		{"two\nlines", `"two\nlines"`, 40},
+		{"   ", `"   "`, 40},
+		{"\xff\x00", `"\xff\x00"`, 40},
+		{"", "", 40},
+		{"abcdefghijklmnop", "abcdefgh…", 9},
+	} {
+		if got := display(tc.in, tc.width); got != tc.want {
+			t.Errorf("display(%q, %d) = %q, want %q", tc.in, tc.width, got, tc.want)
+		}
+	}
+}
+
+func TestFormatPct(t *testing.T) {
+	for in, want := range map[float64]string{0: "0.0%", 0.01: "<0.1%", 0.05: "0.1%", 50: "50.0%", 100: "100.0%"} {
+		if got := formatPct(in); got != want {
+			t.Errorf("formatPct(%v) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestMissingColumns(t *testing.T) {
+	prof := streamio.Profile{Columns: []streamio.ColumnStats{{Name: "id"}, {Name: "attrs.k"}}}
+
+	got := missingColumns([]string{"id", "attrs", "nope", "att"}, prof)
+	if len(got) != 2 || got[0] != "nope" || got[1] != "att" {
+		t.Errorf("missingColumns = %v, want [nope att]", got)
+	}
+}
+
+func TestRunStats_TableKeepsRowsIntactForAwkwardValues(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "awkward.ndjson")
+	data := "{\"v\":\"x\\ty\\nz\"}\n{\"v\":\"x\\ty\\nz\"}\n"
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	err := runStats(context.Background(), &out, statsFlags{in: path, output: "table", top: 5, maxValueWidth: 40})
+	if err != nil {
+		t.Fatalf("runStats: %v", err)
+	}
+	if !strings.Contains(out.String(), `"x\ty\nz"`) {
+		t.Errorf("value not shown quoted on one line:\n%s", out.String())
+	}
+}
+
+func TestRunStats_ReportsAllEmptyColumn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "in.csv")
+	if err := os.WriteFile(path, []byte("a,b\n1,\n2,\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	err := runStats(context.Background(), &out, statsFlags{
+		in: path, output: "table", top: 5, csvHasHeader: true, maxValueWidth: 40,
+	})
+	if err != nil {
+		t.Fatalf("runStats: %v", err)
+	}
+	if !strings.Contains(out.String(), "b ") || !strings.Contains(out.String(), "0.0%") {
+		t.Errorf("all-empty column b missing from output:\n%s", out.String())
 	}
 }
