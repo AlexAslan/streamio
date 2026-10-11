@@ -65,10 +65,20 @@ func RunRecords(
 		}
 	}
 
-	return run(ctx, cfg, len(workers),
+	res, err := run(ctx, cfg, len(workers),
 		func(ctx context.Context, worker int, out chan<- [][]byte, stats *DecodeStats) error {
 			return workers[worker].decode(ctx, out, stats)
 		}, sink)
+
+	// Filters that count type misses report them once the workers are done.
+	for _, w := range workers {
+		for _, f := range w.filters {
+			if m, ok := f.(options.MissCounter); ok {
+				res.Stats.PredicateMisses += m.Misses()
+			}
+		}
+	}
+	return res, err
 }
 
 // splitDecoders asks dec for up to limit decoders over the same input, falling back to driving dec

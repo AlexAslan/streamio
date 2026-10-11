@@ -94,6 +94,9 @@ type Stats struct {
 	RowsSkipped int64
 	// RowsFiltered is how many decoded rows a row filter dropped. Always zero without one.
 	RowsFiltered int64
+	// PredicateMisses is how many comparisons in a WithWhere expression found a value of the wrong
+	// type for their literal (a non-numeric string against a number) and so did not match.
+	PredicateMisses int64
 	// DocumentsDispatched is how many documents were handed to the caller's handler. It can differ
 	// from RowsRead when an encoder renders a whole batch as one document (Parquet) rather than one
 	// document per row (NDJSON).

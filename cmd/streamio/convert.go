@@ -37,17 +37,19 @@ var errNegativeMaxRowErrors = errors.New("--max-row-errors must not be negative"
 // convertFlags holds the convert subcommand's flag values. outFormat is passed alongside these
 // rather than folded in, since runConvert needs it before the rest are turned into options.
 type convertFlags struct {
-	in, out        string
+	out            string
 	inFormat       string
 	inCompression  string
 	outCompression string
 	csvDelimiter   string
+	in             string
+	where          whereFlags
 	readBufferSize int
-	batchSize      int
 	workers        int
 	chunkSize      int
 	maxOpenReaders int
 	maxRowErrors   int
+	batchSize      int
 	csvHasHeader   bool
 }
 
@@ -114,6 +116,8 @@ Parquet decode error always fail the run regardless of --max-row-errors.`,
 		"CSV/TSV first row names the columns rather than holding data")
 	cmd.Flags().IntVar(&flags.maxRowErrors, "max-row-errors", 0,
 		"rows allowed to fail and be skipped before the run fails (0 = fail on the first)")
+
+	registerWhereFlags(cmd, &flags.where)
 
 	for _, name := range []string{"in", "out"} {
 		if err := cmd.MarkFlagRequired(name); err != nil {
@@ -292,6 +296,12 @@ func buildConvertOptions(flags convertFlags, outFormat streamio.Format) ([]strea
 		return nil, err
 	}
 	opts = append(opts, csvOpts...)
+
+	whereOpts, err := whereOptions(flags.where)
+	if err != nil {
+		return nil, err
+	}
+	opts = append(opts, whereOpts...)
 
 	readOpts, err := readOptions(readSizes{
 		readBufferSize: flags.readBufferSize,
