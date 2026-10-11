@@ -47,6 +47,14 @@ is input-only, and Brotli (which has no magic number) is recognized by its `.br`
 ./streamio convert --in data.csv.gz --out data.json.zst --csv-has-header
 ```
 
+Profile a file in one pass: record count, how often each attribute is non-empty, and its most
+frequent values:
+
+```
+./streamio stats --in data.parquet --top 5
+./streamio stats --in data.csv --csv-has-header --columns country,plan --output json
+```
+
 `--out-format` accepts `json`, `parquet`, `csv`, `tsv`, or `arrow`. See `./streamio convert --help`
 for every flag, including CSV/TSV delimiter and header options, batch/worker sizing, and
 `--max-row-errors`.

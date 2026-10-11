@@ -1,0 +1,131 @@
+package streamio
+
+import (
+	"context"
+	"fmt"
+	"os"
+
+	"github.com/AlexAslan/streamio/internal/formatio"
+	"github.com/AlexAslan/streamio/internal/options"
+	"github.com/AlexAslan/streamio/internal/pool"
+	"github.com/AlexAslan/streamio/internal/profile"
+)
+
+// ValueCount is one value and how many records held it.
+type ValueCount struct {
+	// Value is the value rendered as text.
+	Value string `json:"value"`
+	// Count is how many records held the value.
+	Count int64 `json:"count"`
+	// Pct is Count as a percentage (0–100) of all records.
+	Pct float64 `json:"pct"`
+}
+
+// ColumnStats summarizes one attribute of a profiled file.
+type ColumnStats struct {
+	// Name is the attribute path; nested map entries are dotted.
+	Name string `json:"name"`
+	// TopValues are the most frequent non-empty values, most frequent first.
+	TopValues []ValueCount `json:"top_values"`
+	// NonEmpty counts the records where the attribute is present and neither null nor empty.
+	NonEmpty int64 `json:"non_empty"`
+	// Pct is NonEmpty as a percentage (0–100) of all records.
+	Pct float64 `json:"pct"`
+	// Distinct is how many distinct non-empty values were counted.
+	Distinct int64 `json:"distinct"`
+	// DistinctExact is false once the attribute exceeded WithProfileMaxDistinct, making Distinct and
+	// the TopValues counts lower bounds.
+	DistinctExact bool `json:"distinct_exact"`
+}
+
+// Profile is the result of ProfileFile.
+type Profile struct {
+	// Columns lists every attribute in first-seen order.
+	Columns []ColumnStats `json:"columns"`
+	// Records is the number of records read.
+	Records int64 `json:"records"`
+	// RowsSkipped is how many rows WithMaxRowErrors allowed to be skipped; they are not in Records.
+	RowsSkipped int64 `json:"rows_skipped"`
+	// ColumnsTruncated is true when the file had more distinct attribute paths than are tracked.
+	ColumnsTruncated bool `json:"columns_truncated"`
+}
+
+// ProfileFile reads the file at path and summarizes it: the record count, how often each attribute
+// is non-empty, and its most frequent values.
+func ProfileFile(ctx context.Context, path string, opts ...Option) (Profile, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return Profile{}, err
+	}
+	defer f.Close()
+
+	stat, err := f.Stat()
+	if err != nil {
+		return Profile{}, err
+	}
+	return ProfileReaderAt(ctx, Source{Reader: f, Size: stat.Size(), Name: path}, opts...)
+}
+
+// ProfileReaderAt summarizes src the same way ProfileFile does for an on-disk file.
+//
+// Every input format goes through the same canonical-record path ProcessFile uses, so a profile is
+// identical whichever format the same data arrives in. An attribute is "empty" when it is missing,
+// null, or a zero-length string.
+func ProfileReaderAt(ctx context.Context, src Source, opts ...Option) (Profile, error) {
+	cfg := options.New(opts...)
+	if cfg.OptionErr != nil {
+		return Profile{}, cfg.OptionErr
+	}
+
+	in := cfg.InputFormat
+	if in == "" {
+		in = DetectInputFormat(src.Name)
+		cfg.InputFormat = in
+	}
+
+	support, ok := formatSupportFor(in)
+	if !ok || support.newRecordDecoder == nil {
+		return Profile{}, fmt.Errorf("%w: %s has no record decoder", ErrNoConversionPath, in)
+	}
+	dec, err := support.newRecordDecoder(cfg, src)
+	if err != nil {
+		return Profile{}, err
+	}
+	defer dec.Close()
+
+	set := profile.NewSet(profile.Config{
+		Columns:     cfg.Profile.Columns,
+		TopN:        cfg.Profile.TopN,
+		MaxDistinct: cfg.Profile.MaxDistinct,
+	})
+	discard := func(context.Context, []byte) error { return nil }
+	newCollector := func() (formatio.RecordEncoder, error) { return set.NewCollector() }
+
+	result, err := pool.RunRecords(ctx, cfg, dec, newCollector, cfg.Transformer, discard)
+	if err != nil {
+		return Profile{}, err
+	}
+
+	merged := set.Merge()
+	out := Profile{
+		Records:          merged.Records,
+		RowsSkipped:      result.Stats.RowsSkipped,
+		ColumnsTruncated: merged.ColumnsTruncated,
+		Columns:          make([]ColumnStats, 0, len(merged.Columns)),
+	}
+	for _, c := range merged.Columns {
+		cs := ColumnStats{
+			Name:          c.Name,
+			NonEmpty:      c.NonEmpty,
+			Pct:           c.Pct,
+			Distinct:      c.Distinct,
+			DistinctExact: c.DistinctExact,
+			TopValues:     make([]ValueCount, 0, len(c.TopValues)),
+		}
+		for _, v := range c.TopValues {
+			cs.TopValues = append(cs.TopValues, ValueCount{Value: v.Value, Count: v.Count, Pct: v.Pct})
+		}
+		out.Columns = append(out.Columns, cs)
+	}
+	return out, nil
+}

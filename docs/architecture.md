@@ -137,3 +137,18 @@ differs:
   whole row group (`+= rowGroup.NumRows()`), and the record path does it unconditionally (`+= n`
   decoded records) because whether an item is one row or a whole batch is the encoder's choice.
   `DocumentsDispatched` increments only after the handler accepts a document.
+
+## Profiling
+
+`ProfileFile` reuses the generic path rather than adding a per-format implementation: it opens the
+input's `RecordDecoder` and hands `pool.RunRecords` a `RecordEncoder` that, instead of rendering
+documents, folds each batch into counts and returns none.
+
+The pool already builds one encoder per decode worker, so each worker aggregates into its own
+`profile.Collector` with no locking on the hot path; the collectors are merged once after the run.
+Row-error handling, transforms and worker splitting all come from the pool unchanged.
+
+Counting avoids allocation once a value has been seen: lookups use `m[string(b)]`, which the
+compiler does not allocate for, and each map entry holds a `*int64` so a repeat sighting
+increments in place. Only a first-seen value copies its key. Each attribute stops adding new
+distinct values at `WithProfileMaxDistinct`, which bounds memory on high-cardinality columns.

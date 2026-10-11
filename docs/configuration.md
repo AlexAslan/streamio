@@ -18,6 +18,19 @@
 | `WithLogger(l)` | none | Receives a one-line summary when `ProcessFile` starts. |
 | `WithMaxRowErrors(n, onSkip)` | `0` | Rows allowed to fail and be skipped before the run fails (BigQuery-style `max_bad_records`). `0` fails on the first error. Applies to NDJSON and CSV/TSV field errors on the generic path only; CSV/TSV syntax errors and Parquet/Arrow decode errors are always fatal. `onSkip`, if set, is called per skipped row. |
 
+## Profiling (`ProfileFile` / `ProfileReaderAt`)
+
+These read the same input options as `ProcessFile` (`WithInputFormat`, `WithCSVHasHeader`,
+`WithParallelWorkers`, `WithTransforms`, `WithMaxRowErrors`, ...) and ignore the output options.
+
+| Option | Default | Effect |
+|---|---|---|
+| `WithProfileTopN(n)` | `10` | Most frequent values kept per attribute. |
+| `WithProfileMaxDistinct(n)` | `100000` | Distinct values counted per attribute. Past it the attribute is marked `DistinctExact == false`; non-empty counts stay exact. |
+| `WithProfileColumns(names...)` | all | Restrict the profile to these attribute paths (dotted for nested map entries). |
+
+An attribute is *empty* when it is missing, null, or a zero-length string; whitespace is not empty.
+
 `n <= 0` means "use the default" for any numeric option. Zero `Format` means `FormatJSON`.
 
 `ProcessFile` returns `streamio.Result{Stats: streamio.Stats{...}}`: `RowsRead`, `DocumentsDispatched`,

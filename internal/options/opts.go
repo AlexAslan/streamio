@@ -27,6 +27,7 @@ type Config struct {
 	InputCompression    Compression
 	OutputFormat        OutputFormat
 	Run                 RunConfig
+	Profile             ProfileConfig
 	MaxDecompressedSize int64
 	NDJSON              NDJSONConfig
 	Parquet             ParquetConfig
@@ -49,6 +50,16 @@ type RunConfig struct {
 	//
 	// It forces Workers down to a single decode worker: see formatio.FinalizableRecordEncoder.
 	SingleFileOutput bool
+}
+
+// ProfileConfig holds settings specific to profiling a file.
+type ProfileConfig struct {
+	// Columns, when non-empty, restricts the profile to these attribute paths.
+	Columns []string
+	// TopN is how many most-frequent values are kept per attribute.
+	TopN int
+	// MaxDistinct caps how many distinct values are counted per attribute.
+	MaxDistinct int
 }
 
 // NDJSONConfig holds settings specific to reading or writing NDJSON.
@@ -171,4 +182,21 @@ func WithTransforms(rules ...PathTransformRule) Option {
 		}
 		c.Transformer = transformer
 	}
+}
+
+// WithProfileTopN sets how many most-frequent values a profile keeps per attribute. n<=0 falls
+// back to the default.
+func WithProfileTopN(n int) Option {
+	return func(o *Config) { o.Profile.TopN = n }
+}
+
+// WithProfileMaxDistinct caps how many distinct values a profile counts per attribute. n<=0 falls
+// back to the default.
+func WithProfileMaxDistinct(n int) Option {
+	return func(o *Config) { o.Profile.MaxDistinct = n }
+}
+
+// WithProfileColumns restricts a profile to the named attribute paths.
+func WithProfileColumns(names ...string) Option {
+	return func(o *Config) { o.Profile.Columns = names }
 }

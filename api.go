@@ -152,3 +152,21 @@ func WithTransforms(rules ...TransformRule) Option {
 func WithMaxRowErrors(n int, onSkip func(err error)) Option {
 	return options.WithMaxRowErrors(n, onSkip)
 }
+
+// WithProfileTopN sets how many most-frequent values ProfileFile keeps per attribute. n<=0 falls
+// back to the default of 10.
+func WithProfileTopN(n int) Option {
+	return options.WithProfileTopN(n)
+}
+
+// WithProfileMaxDistinct caps how many distinct values ProfileFile counts per attribute, bounding
+// memory on high-cardinality columns. n<=0 falls back to the default of 100,000.
+func WithProfileMaxDistinct(n int) Option {
+	return options.WithProfileMaxDistinct(n)
+}
+
+// WithProfileColumns restricts ProfileFile to the named attribute paths (nested map entries are
+// addressed with dots, like WithTransforms).
+func WithProfileColumns(names ...string) Option {
+	return options.WithProfileColumns(names...)
+}
