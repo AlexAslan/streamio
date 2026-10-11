@@ -37,6 +37,15 @@ type (
 	Logger = options.Logger
 )
 
+// RowFilter decides, per decoded record, whether it continues down the pipeline. See WithRowFilter.
+type RowFilter = options.RowFilter
+
+// RecordTransform rewrites a decoded record before it is encoded. See WithRecordTransform.
+type RecordTransform = options.RecordTransform
+
+// RecordConsumer receives decoded records without producing any output. See ConsumeFile.
+type RecordConsumer = options.RecordConsumer
+
 // TransformRule is a single rename or drop rule built by RenamePath or DropPath.
 type TransformRule = options.PathTransformRule
 
@@ -169,4 +178,18 @@ func WithProfileMaxDistinct(n int) Option {
 // them, addressing nested map entries with dots like WithTransforms.
 func WithProfileColumns(names ...string) Option {
 	return options.WithProfileColumns(names...)
+}
+
+// WithRowFilter adds a row filter that drops every record it rejects before any transform or
+// encoding. newFilter is called once per decode worker, so a filter may keep per-worker scratch
+// without locking; filters run in the order added.
+func WithRowFilter(newFilter func() (RowFilter, error)) Option {
+	return options.WithRowFilter(newFilter)
+}
+
+// WithRecordTransform adds a transform that rewrites each record before it is encoded. newTransform
+// is called once per decode worker, so a transform may keep per-worker scratch without locking;
+// transforms run in the order added, after every filter and before WithTransforms' rules.
+func WithRecordTransform(newTransform func() (RecordTransform, error)) Option {
+	return options.WithRecordTransform(newTransform)
 }

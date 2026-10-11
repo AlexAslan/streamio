@@ -15,7 +15,8 @@ non-trivial changes — it documents *why* the code is shaped the way it is, not
 - `internal/jsonio` — NDJSON decode/encode, raw source.
 - `internal/parquetio` — Parquet decode/encode, raw source, row-group extraction.
 - `internal/csvio` — CSV and TSV decode/encode, raw source (one package, delimiter-parameterized).
-- `internal/record` — canonical format-neutral row type (`Record`, `Field`, `Value`).
+- `record` — canonical format-neutral row type (`Record`, `Field`, `Value`); public (experimental) so
+  custom pipeline stages can use it.
 - `internal/formatio` — the generic cross-format seam (`RecordDecoder`/`RecordEncoder` interfaces).
 - `internal/options` — functional options, config, transforms.
 - `cmd/streamio/` — the `streamio` CLI (cobra-based).

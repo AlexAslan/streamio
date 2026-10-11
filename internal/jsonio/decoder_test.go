@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/AlexAslan/streamio/internal/jsonio"
-	"github.com/AlexAslan/streamio/internal/record"
+	"github.com/AlexAslan/streamio/record"
 )
 
 type objectDecodedField struct {

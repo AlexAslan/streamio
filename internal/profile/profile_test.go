@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/AlexAslan/streamio/internal/profile"
-	"github.com/AlexAslan/streamio/internal/record"
+	"github.com/AlexAslan/streamio/record"
 )
 
 func feed(t *testing.T, set *profile.Set, recs ...record.Record) {
@@ -16,9 +16,7 @@ func feed(t *testing.T, set *profile.Set, recs ...record.Record) {
 
 	c, err := set.NewCollector()
 	require.NoError(t, err)
-	docs, err := c.EncodeBatch(recs)
-	require.NoError(t, err)
-	assert.Empty(t, docs, "a collector never emits documents")
+	require.NoError(t, c.Consume(recs))
 }
 
 func cols(p profile.Profile) map[string]profile.Column {
@@ -363,9 +361,9 @@ func TestCollector_SteadyStateAllocatesNothing(t *testing.T) {
 	set := profile.NewSet(profile.Config{})
 	c, err := set.NewCollector()
 	require.NoError(t, err)
-	_, _ = c.EncodeBatch(batch) // warm: first sightings allocate their keys
+	_ = c.Consume(batch) // warm: first sightings allocate their keys
 
-	allocs := testing.AllocsPerRun(100, func() { _, _ = c.EncodeBatch(batch) })
+	allocs := testing.AllocsPerRun(100, func() { _ = c.Consume(batch) })
 	assert.Zero(t, allocs)
 }
 
@@ -380,11 +378,11 @@ func TestCollector_ApproximateHitsAllocateNothing(t *testing.T) {
 	for i := range 20 {
 		warm = append(warm, record.Record{}.Append("c", str(fmt.Sprintf("v%d", i))))
 	}
-	_, _ = c.EncodeBatch(warm)
+	_ = c.Consume(warm)
 
 	// After the warm-up the tracked values are some subset; repeating the last one is a hit.
 	hit := []record.Record{record.Record{}.Append("c", str("v19"))}
-	allocs := testing.AllocsPerRun(100, func() { _, _ = c.EncodeBatch(hit) })
+	allocs := testing.AllocsPerRun(100, func() { _ = c.Consume(hit) })
 	assert.Zero(t, allocs)
 }
 
@@ -402,12 +400,12 @@ func BenchmarkCollector_WarmDistinctSet(b *testing.B) {
 			Append("score", record.Float64(float64(i%8)))
 	}
 	// Warm the distinct sets so only steady-state cost is measured.
-	_, _ = c.EncodeBatch(batch)
+	_ = c.Consume(batch)
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		_, _ = c.EncodeBatch(batch)
+		_ = c.Consume(batch)
 	}
 }
 
@@ -422,11 +420,11 @@ func BenchmarkMerge_HighCardinality(b *testing.B) {
 		for i := range 100_000 {
 			batch = append(batch, record.Record{}.Append("c", str(fmt.Sprintf("value-%d", i))))
 			if len(batch) == cap(batch) {
-				_, _ = c.EncodeBatch(batch)
+				_ = c.Consume(batch)
 				batch = batch[:0]
 			}
 		}
-		_, _ = c.EncodeBatch(batch)
+		_ = c.Consume(batch)
 
 		b.StartTimer()
 		_ = set.Merge()

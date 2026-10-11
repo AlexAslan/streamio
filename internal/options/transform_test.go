@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/AlexAslan/streamio/internal/options"
-	"github.com/AlexAslan/streamio/internal/record"
+	"github.com/AlexAslan/streamio/record"
 )
 
 func TestPathTransformer_RenameAndDropNestedPaths(t *testing.T) {

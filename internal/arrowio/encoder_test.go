@@ -10,7 +10,7 @@ import (
 	"github.com/AlexAslan/streamio/internal/arrowio"
 	"github.com/AlexAslan/streamio/internal/formatio"
 	"github.com/AlexAslan/streamio/internal/options"
-	"github.com/AlexAslan/streamio/internal/record"
+	"github.com/AlexAslan/streamio/record"
 )
 
 // newBatchEncoder builds an encoder with the default options, failing the test rather than

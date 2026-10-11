@@ -92,6 +92,8 @@ type Stats struct {
 	// RowsSkipped is how many rows WithMaxRowErrors allowed to be skipped. Always zero under the
 	// default MaxRowErrors of 0.
 	RowsSkipped int64
+	// RowsFiltered is how many decoded rows a row filter dropped. Always zero without one.
+	RowsFiltered int64
 	// DocumentsDispatched is how many documents were handed to the caller's handler. It can differ
 	// from RowsRead when an encoder renders a whole batch as one document (Parquet) rather than one
 	// document per row (NDJSON).

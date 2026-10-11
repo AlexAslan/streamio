@@ -12,7 +12,7 @@ import (
 	"github.com/AlexAslan/streamio/internal/csvio"
 	"github.com/AlexAslan/streamio/internal/formatio"
 	"github.com/AlexAslan/streamio/internal/options"
-	"github.com/AlexAslan/streamio/internal/record"
+	"github.com/AlexAslan/streamio/record"
 )
 
 // openRecordDecoder opens a decoder over path and registers its Close, along with the underlying

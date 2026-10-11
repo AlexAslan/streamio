@@ -2,12 +2,9 @@ package streamio
 
 import (
 	"context"
-	"fmt"
 	"os"
 
-	"github.com/AlexAslan/streamio/internal/formatio"
 	"github.com/AlexAslan/streamio/internal/options"
-	"github.com/AlexAslan/streamio/internal/pool"
 	"github.com/AlexAslan/streamio/internal/profile"
 )
 
@@ -90,33 +87,14 @@ func ProfileReaderAt(ctx context.Context, src Source, opts ...Option) (Profile, 
 		return Profile{}, cfg.OptionErr
 	}
 
-	// Resolves compression and format from the contents, exactly as ProcessReaderAt does.
-	src, release, err := openInput(ctx, src, &cfg)
-	if err != nil {
-		return Profile{}, err
-	}
-	defer func() { _ = release() }()
-	in := cfg.InputFormat
-
-	support, ok := formatSupportFor(in)
-	if !ok || support.newRecordDecoder == nil {
-		return Profile{}, fmt.Errorf("%w: %s has no record decoder", ErrNoConversionPath, in)
-	}
-	dec, err := support.newRecordDecoder(cfg, src)
-	if err != nil {
-		return Profile{}, err
-	}
-	defer dec.Close()
-
 	set := profile.NewSet(profile.Config{
 		Columns:     cfg.Profile.Columns,
 		TopN:        cfg.Profile.TopN,
 		MaxDistinct: cfg.Profile.MaxDistinct,
 	})
-	discard := func(context.Context, []byte) error { return nil }
-	newCollector := func() (formatio.RecordEncoder, error) { return set.NewCollector() }
+	newCollector := func() (RecordConsumer, error) { return set.NewCollector() }
 
-	result, err := pool.RunRecords(ctx, cfg, dec, newCollector, cfg.Transformer, discard)
+	result, err := ConsumeReaderAt(ctx, src, newCollector, opts...)
 	if err != nil {
 		return Profile{}, err
 	}

@@ -10,7 +10,7 @@ import (
 
 	"github.com/AlexAslan/streamio/internal/formatio"
 	"github.com/AlexAslan/streamio/internal/options"
-	"github.com/AlexAslan/streamio/internal/record"
+	"github.com/AlexAslan/streamio/record"
 )
 
 // recordDecoder decodes a disjoint share of s's row groups into canonical records. It implements

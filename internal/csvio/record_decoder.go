@@ -9,7 +9,7 @@ import (
 
 	"github.com/AlexAslan/streamio/internal/formatio"
 	"github.com/AlexAslan/streamio/internal/options"
-	"github.com/AlexAslan/streamio/internal/record"
+	"github.com/AlexAslan/streamio/record"
 )
 
 // errFieldCountMismatch reports a row whose field count doesn't match the header (or, headerless,

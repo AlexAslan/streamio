@@ -3,7 +3,7 @@ package record_test
 import (
 	"testing"
 
-	"github.com/AlexAslan/streamio/internal/record"
+	"github.com/AlexAslan/streamio/record"
 )
 
 // allocRuns is the sample size for every testing.AllocsPerRun assertion here. Large enough that a
@@ -302,5 +302,107 @@ func TestSemanticString(t *testing.T) {
 				t.Errorf("Semantic(%d).String() = %q, want %q", tt.semantic, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestValueAppendText(t *testing.T) {
+	negZero := func() float64 { z := 0.0; return -z }()
+
+	for _, tc := range []struct {
+		name string
+		want string
+		v    record.Value
+		ok   bool
+	}{
+		{name: "string", v: record.Bytes([]byte("hi")), want: "hi", ok: true},
+		{name: "empty string", v: record.Bytes([]byte{}), want: "", ok: false},
+		{name: "null", v: record.Null(), want: "", ok: false},
+		{name: "bool", v: record.Bool(true), want: "true", ok: true},
+		{name: "int", v: record.Int64(-5, record.SemanticNone), want: "-5", ok: true},
+		{name: "unsigned", v: record.Int64(-1, record.SemanticUnsigned), want: "18446744073709551615", ok: true},
+		{name: "float", v: record.Float64(1_000_000), want: "1000000", ok: true},
+		{name: "float32", v: record.Float32(0.1), want: "0.1", ok: true},
+		{name: "negative zero", v: record.Float64(negZero), want: "0", ok: true},
+		{name: "date", v: record.Int64(19723, record.SemanticDate), want: "2024-01-01", ok: true},
+		{
+			name: "millis",
+			v:    record.Int64(1_704_067_200_000, record.SemanticTimestampMillis),
+			want: "2024-01-01T00:00:00.000Z",
+			ok:   true,
+		},
+		{name: "map", v: record.Map(record.Record{}.Append("k", record.Null())), want: "", ok: false},
+		{name: "list", v: record.List([]record.Value{record.Bool(true)}), want: "", ok: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := tc.v.AppendText([]byte("prefix:"))
+			if ok != tc.ok {
+				t.Fatalf("ok = %v, want %v", ok, tc.ok)
+			}
+			want := "prefix:" + tc.want
+			if string(got) != want {
+				t.Errorf("AppendText = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestValueAppendTextAllocatesNothing(t *testing.T) {
+	buf := make([]byte, 0, 64)
+	values := []record.Value{
+		record.Bytes([]byte("x")),
+		record.Int64(7, record.SemanticNone),
+		record.Int64(19723, record.SemanticDate),
+		record.Float64(2.5),
+		record.Bool(true),
+	}
+
+	allocs := testing.AllocsPerRun(allocRuns, func() {
+		for _, v := range values {
+			buf, _ = v.AppendText(buf[:0])
+		}
+	})
+	if allocs != 0 {
+		t.Errorf("AppendText allocates %.1f times per run, want 0", allocs)
+	}
+}
+
+func TestArena(t *testing.T) {
+	var a record.Arena
+
+	first := a.Copy([]byte("alpha"))
+	second := a.Copy([]byte("beta"))
+	// Force growth well past the initial capacity: earlier slices must keep their contents.
+	big := a.Alloc(1 << 12)
+	copy(big, "x")
+
+	if string(first) != "alpha" || string(second) != "beta" {
+		t.Fatalf("copies changed after growth: %q %q", first, second)
+	}
+	if cap(first) != len(first) {
+		t.Errorf("cap(first) = %d, want %d: an append must not write into the arena", cap(first), len(first))
+	}
+
+	a.Reset()
+	third := a.Copy([]byte("gamma"))
+	if string(third) != "gamma" {
+		t.Errorf("third = %q, want gamma", third)
+	}
+}
+
+func TestArenaSteadyStateAllocatesNothing(t *testing.T) {
+	var a record.Arena
+	src := []byte("0123456789abcdef")
+	for range 64 { // warm: size the backing array
+		a.Copy(src)
+	}
+
+	allocs := testing.AllocsPerRun(allocRuns, func() {
+		a.Reset()
+		for range 8 {
+			_ = a.Copy(src)
+		}
+	})
+	if allocs != 0 {
+		t.Errorf("Arena allocates %.1f times per run once warm, want 0", allocs)
 	}
 }

@@ -4,12 +4,9 @@ package profile
 
 import (
 	"slices"
-	"strconv"
 	"sync"
 
-	"github.com/AlexAslan/streamio/internal/formatio"
-	"github.com/AlexAslan/streamio/internal/jsonio"
-	"github.com/AlexAslan/streamio/internal/record"
+	"github.com/AlexAslan/streamio/record"
 )
 
 // Defaults for the knobs Config leaves at zero.
@@ -23,9 +20,6 @@ const (
 
 // listValue is the single value a non-empty list column is counted under.
 const listValue = "[list]"
-
-// decimal is the radix every integer renders at.
-const decimal = 10
 
 // heapArity is the number of children of each node in the binary heaps below.
 const heapArity = 2
@@ -97,9 +91,7 @@ func NewSet(cfg Config) *Set {
 }
 
 // NewCollector builds a worker-local Collector and registers it for the final merge.
-//
-//nolint:ireturn // pool.RunRecords wants a formatio.RecordEncoder factory.
-func (s *Set) NewCollector() (formatio.RecordEncoder, error) {
+func (s *Set) NewCollector() (*Collector, error) {
 	c := newCollector(s.cfg)
 
 	s.mu.Lock()
@@ -210,8 +202,8 @@ type cachedColumn struct {
 	ok   bool
 }
 
-// Collector aggregates the records one decode worker sees. It implements formatio.RecordEncoder so
-// the pool drives it exactly as it would an encoder; it never produces a document.
+// Collector aggregates the records one decode worker sees. It is a streamio.RecordConsumer, so the
+// pool drives it exactly as it would an encoder; it never produces a document.
 type Collector struct {
 	// index maps an attribute path to its position in cols, or to -1 for a path that is excluded.
 	index map[string]int
@@ -238,13 +230,13 @@ func newCollector(cfg Config) *Collector {
 	return c
 }
 
-// EncodeBatch folds batch into the collector's counts and returns no documents.
-func (c *Collector) EncodeBatch(batch []record.Record) ([][]byte, error) {
+// Consume folds batch into the collector's counts.
+func (c *Collector) Consume(batch []record.Record) error {
 	for _, rec := range batch {
 		c.records++
 		c.walk(rec, 0, false)
 	}
-	return nil, nil
+	return nil
 }
 
 // walk visits every field of rec. c.path[:prefix] holds the dotted path of rec's parent, and
@@ -367,8 +359,9 @@ func (c *Collector) record(col *column, v *record.Value) {
 // render returns v's value as text for counting, in c.scratch or aliasing v. ok is false for an
 // empty value: null, a zero-length string, or an empty list.
 //
-// Rendering matches what the converters write (jsonio's number and date formatting), so one value
-// is one key whichever format it arrived in.
+// Rendering is record.Value.AppendText, the converters' own formatting, so one value is one key
+// whichever format it arrived in. A non-empty list is the one value that has no text of its own and
+// counts under listValue.
 func (c *Collector) render(v *record.Value) ([]byte, bool) {
 	switch v.Kind {
 	case record.KindBytes:
@@ -378,45 +371,14 @@ func (c *Collector) render(v *record.Value) ([]byte, bool) {
 			return nil, false
 		}
 		c.scratch = append(c.scratch[:0], listValue...)
-	case record.KindBool:
-		c.scratch = strconv.AppendBool(c.scratch[:0], v.Bool)
-	case record.KindInt64:
-		c.scratch = appendInt(c.scratch[:0], v)
-	case record.KindFloat64:
-		f, bits := v.F64, jsonio.Bits64
-		if v.Semantic == record.SemanticFloat32 {
-			bits = jsonio.Bits32
-		}
-		if f == 0 {
-			f = 0 // folds -0 into 0: they are the same number
-		}
-		c.scratch = jsonio.AppendFloat(c.scratch[:0], f, bits)
-	case record.KindNull, record.KindMap:
-		// A non-empty map is expanded by walk and never reaches here.
-		return nil, false
+		return c.scratch, true
+	case record.KindNull, record.KindMap, record.KindBool, record.KindInt64, record.KindFloat64:
+		var ok bool
+		// A non-empty map is expanded by walk and never reaches here; AppendText reports it empty.
+		c.scratch, ok = v.AppendText(c.scratch[:0])
+		return c.scratch, ok
 	}
-	return c.scratch, true
-}
-
-// appendInt renders an integer the way its Semantic says it really is.
-func appendInt(dst []byte, v *record.Value) []byte {
-	switch v.Semantic {
-	case record.SemanticDate:
-		return jsonio.AppendDate(dst, v.I64)
-	case record.SemanticTimestampMillis:
-		return jsonio.AppendTimestampMillis(dst, v.I64)
-	case record.SemanticTimestampMicros:
-		return jsonio.AppendTimestampMicros(dst, v.I64)
-	case record.SemanticTimestampNanos:
-		return jsonio.AppendTimestampNanos(dst, v.I64)
-	case record.SemanticUnsigned:
-		//nolint:gosec // SemanticUnsigned says the int64's bits are a uint64.
-		return strconv.AppendUint(dst, uint64(v.I64), decimal)
-	case record.SemanticNone, record.SemanticFloat32:
-		return strconv.AppendInt(dst, v.I64, decimal)
-	default:
-		return strconv.AppendInt(dst, v.I64, decimal)
-	}
+	return nil, false
 }
 
 // merged is one attribute's counts combined across every worker.

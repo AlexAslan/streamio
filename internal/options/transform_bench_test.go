@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/AlexAslan/streamio/internal/options"
-	"github.com/AlexAslan/streamio/internal/record"
+	"github.com/AlexAslan/streamio/record"
 )
 
 // genTransformBenchRecord builds a record with n top-level scalar fields plus one nested

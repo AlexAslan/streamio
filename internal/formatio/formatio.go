@@ -12,7 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/AlexAslan/streamio/internal/record"
+	"github.com/AlexAslan/streamio/record"
 )
 
 // RawSource streams a file's own native-format bytes straight to the sink, bypassing any
@@ -143,4 +143,7 @@ type DecodeStats struct {
 	// RowsSkipped counts rows WithMaxRowErrors allowed to be skipped. Always zero under the
 	// default MaxRowErrors of 0.
 	RowsSkipped atomic.Int64
+
+	// RowsFiltered counts decoded rows a row filter dropped. Always zero without one.
+	RowsFiltered atomic.Int64
 }
