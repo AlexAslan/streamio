@@ -4,10 +4,14 @@
 
 Before routing, `ProcessFile` resolves two things from the file's first 4 KiB:
 
-1. **Compression**: gzip (`1f 8b`) and zstd (`28 b5 2f fd`) magic. A compressed input is
+1. **Compression**: gzip (`1f 8b`), zstd (`28 b5 2f fd`), bzip2 (`BZh` + block magic), xz
+   (`fd 37 7a 58 5a 00`), LZ4 frame (`04 22 4d 18`) and framed Snappy magic. Brotli has no magic
+   number, so it is picked up from a `.br` extension (or `WithInputCompression`) only; a plain-text
+   file that merely *looks* compressed by name is still read as plain text. A compressed input is
    decompressed once, up front, into memory (up to 64 MiB) or a temp file removed when the run
    ends. This keeps the `io.ReaderAt` every decoder relies on, so NDJSON chunking and Parquet row
    groups still run in parallel. `WithMaxDecompressedSize` guards against decompression bombs.
+   Decompression itself is a single sequential stream, done before decoding starts.
 2. **Format**: Parquet (`PAR1`) and Arrow (`ARROW1`) by magic number, NDJSON by a leading `{`, and
    CSV vs TSV by which delimiter appears a consistent number of times per line outside quotes.
 

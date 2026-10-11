@@ -27,6 +27,10 @@ var ErrEncryptedParquet = errors.New("streamio: encrypted Parquet footers are no
 const (
 	gzipMagic    = "\x1f\x8b"
 	zstdMagic    = "\x28\xb5\x2f\xfd"
+	bzip2Magic   = "BZh"
+	xzMagic      = "\xfd7zXZ\x00"
+	lz4Magic     = "\x04\x22\x4d\x18"
+	snappyMagic  = "\xff\x06\x00\x00sNaPpY"
 	parquetMagic = "PAR1"
 	parquetEnc   = "PARE"
 	arrowMagic   = "ARROW1"
@@ -45,9 +49,28 @@ func Compression(head []byte) options.Compression {
 		return options.CompressionGzip
 	case hasMagic(head, zstdMagic):
 		return options.CompressionZstd
+	case hasMagic(head, xzMagic):
+		return options.CompressionXZ
+	case hasMagic(head, lz4Magic):
+		return options.CompressionLZ4
+	case hasMagic(head, snappyMagic):
+		return options.CompressionSnappy
+	case isBzip2(head):
+		return options.CompressionBzip2
 	default:
 		return options.CompressionNone
 	}
+}
+
+// isBzip2 reports whether head opens like a bzip2 stream: "BZh", a block-size digit 1–9, then the
+// first block's magic. The extra bytes keep text that merely starts with "BZh" from matching.
+func isBzip2(head []byte) bool {
+	const blockMagic = "\x31\x41\x59\x26\x53\x59" // pi, per the bzip2 format
+	if !hasMagic(head, bzip2Magic) || len(head) < len(bzip2Magic)+1+len(blockMagic) {
+		return false
+	}
+	level := head[len(bzip2Magic)]
+	return level >= '1' && level <= '9' && string(head[4:4+len(blockMagic)]) == blockMagic
 }
 
 // Format returns the document format of head, a prefix of an already-decompressed input.
@@ -106,18 +129,50 @@ func FormatFromExt(name string) (options.OutputFormat, bool) {
 	}
 }
 
-// StripCompressionExt removes a trailing compression extension (.gz, .gzip, .zst, .zstd) from
-// name, returning the remaining name and the compression the extension named.
+// StripCompressionExt removes a trailing compression extension (.gz, .zst, .bz2, .xz, .lz4, .sz,
+// .br and their long spellings) from name, returning the remaining name and the compression the
+// extension named.
 func StripCompressionExt(name string) (string, options.Compression) {
 	ext := strings.ToLower(filepath.Ext(name))
+	var c options.Compression
 	switch ext {
 	case ".gz", ".gzip":
-		return strings.TrimSuffix(name, name[len(name)-len(ext):]), options.CompressionGzip
+		c = options.CompressionGzip
 	case ".zst", ".zstd":
-		return strings.TrimSuffix(name, name[len(name)-len(ext):]), options.CompressionZstd
+		c = options.CompressionZstd
+	case ".bz2", ".bzip2":
+		c = options.CompressionBzip2
+	case ".xz":
+		c = options.CompressionXZ
+	case ".lz4":
+		c = options.CompressionLZ4
+	case ".sz", ".snappy":
+		c = options.CompressionSnappy
+	case ".br":
+		c = options.CompressionBrotli
 	default:
 		return name, options.CompressionNone
 	}
+	return name[:len(name)-len(ext)], c
+}
+
+// NeedsExtension reports whether c has no magic number, so only a file name or an explicit option
+// can say a stream uses it.
+func NeedsExtension(c options.Compression) bool {
+	return c == options.CompressionBrotli
+}
+
+// Detect returns the compression of a file: its magic number when it has one, else the compression
+// its name's extension names, but only for codecs with no magic of their own. A name like x.csv.gz
+// over plain text is therefore read as plain text rather than failing to gunzip.
+func Detect(head []byte, name string) options.Compression {
+	if c := Compression(head); c != options.CompressionNone {
+		return c
+	}
+	if _, c := StripCompressionExt(name); NeedsExtension(c) {
+		return c
+	}
+	return options.CompressionNone
 }
 
 // candidate is one delimiter's score over the sampled lines.

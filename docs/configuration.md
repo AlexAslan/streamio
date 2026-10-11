@@ -3,7 +3,7 @@
 | Option | Default | Effect |
 |---|---|---|
 | `WithInputFormat(f)` | content sniffing | Source file's native format. |
-| `WithInputCompression(c)` | auto-detected | `CompressionNone`, `CompressionGzip`, or `CompressionZstd`; pins the compression instead of sniffing it. |
+| `WithInputCompression(c)` | auto-detected | `CompressionNone`, `CompressionGzip`, `CompressionZstd`, `CompressionBzip2`, `CompressionXZ`, `CompressionLZ4`, `CompressionSnappy` or `CompressionBrotli`; pins the compression instead of sniffing it. Brotli can only be selected this way or by a `.br` extension. |
 | `WithMaxDecompressedSize(n)` | no cap | Fails with `ErrDecompressedTooLarge` if a compressed input expands past `n` bytes. |
 | `WithOutputFormat(f)` | `FormatJSON` | Format documents are delivered in. Matching the input's native format selects raw passthrough where available. |
 | `WithTransforms(rules...)` | none | Declarative rename/drop path transforms, generic path only. Dotted paths address nested map entries. |

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/hex"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -11,9 +13,13 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/andybalholm/brotli"
+	"github.com/klauspost/compress/snappy"
 	"github.com/klauspost/compress/zstd"
+	"github.com/pierrec/lz4/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/ulikunitz/xz"
 
 	"github.com/AlexAslan/streamio"
 )
@@ -40,6 +46,20 @@ func zstdBytes(tb testing.TB, s string) []byte {
 	_, err = w.Write([]byte(s))
 	require.NoError(tb, err)
 	require.NoError(tb, w.Close())
+	return b.Bytes()
+}
+
+// inputNDJSONBzip2 is inputNDJSON compressed by the reference bzip2 tool; Go has no bzip2 writer.
+const inputNDJSONBzip2 = "425a6839314159265359e7dbae3e00001dd9800010100438103e23802a200022bf54d4c9a6341" +
+	"b5429931320c8c438e5c45851bcbebe3523d26a72810c41561b09143f177245385090e7dbae3e"
+
+func encodeNDJSONWith(tb testing.TB, w func(io.Writer) io.WriteCloser) []byte {
+	tb.Helper()
+	var b bytes.Buffer
+	cw := w(&b)
+	_, err := cw.Write([]byte(inputNDJSON))
+	require.NoError(tb, err)
+	require.NoError(tb, cw.Close())
 	return b.Bytes()
 }
 
@@ -78,6 +98,22 @@ func TestProcessFile_CompressedInputMatchesPlain(t *testing.T) {
 		"in.ndjson.zst": zstdBytes(t, inputNDJSON),
 		"in.gz":         gzipBytes(t, inputNDJSON), // no inner extension: content decides
 		"noext":         zstdBytes(t, inputNDJSON), // no extension at all
+		"in.ndjson.xz": encodeNDJSONWith(t, func(w io.Writer) io.WriteCloser {
+			xw, err := xz.NewWriter(w)
+			require.NoError(t, err)
+			return xw
+		}),
+		"in.ndjson.lz4": encodeNDJSONWith(t, func(w io.Writer) io.WriteCloser { return lz4.NewWriter(w) }),
+		"in.ndjson.sz": encodeNDJSONWith(t, func(w io.Writer) io.WriteCloser {
+			return snappy.NewBufferedWriter(w)
+		}),
+		"in.lz4":       encodeNDJSONWith(t, func(w io.Writer) io.WriteCloser { return lz4.NewWriter(w) }),
+		"in.ndjson.br": encodeNDJSONWith(t, func(w io.Writer) io.WriteCloser { return brotli.NewWriter(w) }),
+		"in.ndjson.bz2": func() []byte {
+			b, err := hex.DecodeString(inputNDJSONBzip2)
+			require.NoError(t, err)
+			return b
+		}(),
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -143,7 +179,7 @@ func TestProcessFile_InvalidCompressionOption(t *testing.T) {
 	path := writeTemp(t, "in.ndjson", []byte(inputNDJSON))
 	_, err := streamio.ProcessFile(context.Background(), path,
 		func(context.Context, []byte) error { return nil },
-		streamio.WithInputCompression("brotli"))
+		streamio.WithInputCompression("lzma"))
 	require.Error(t, err)
 }
 
@@ -189,4 +225,21 @@ func TestDetectInputFormat_IgnoresCompressionExtension(t *testing.T) {
 	assert.Equal(t, streamio.FormatCSV, streamio.DetectInputFormat("a.csv.gz"))
 	assert.Equal(t, streamio.FormatParquet, streamio.DetectInputFormat("a.parquet.zst"))
 	assert.Equal(t, streamio.FormatJSON, streamio.DetectInputFormat("a.unknown"))
+}
+
+func TestProcessFile_BrotliNeedsExtensionOrExplicitOption(t *testing.T) {
+	t.Parallel()
+
+	data := encodeNDJSONWith(t, func(w io.Writer) io.WriteCloser { return brotli.NewWriter(w) })
+	noop := func(context.Context, []byte) error { return nil }
+
+	// No magic number and no .br extension: it can't be auto-detected, and says so.
+	_, err := streamio.ProcessFile(context.Background(), writeTemp(t, "in.bin", data), noop)
+	require.Error(t, err)
+
+	// Naming it explicitly works.
+	got := collect(t, writeTemp(t, "in.bin", data),
+		streamio.WithInputCompression(streamio.CompressionBrotli),
+		streamio.WithInputFormat(streamio.FormatJSON))
+	assert.Len(t, got, 3)
 }

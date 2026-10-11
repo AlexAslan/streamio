@@ -7,12 +7,16 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 	"sync"
 
+	"github.com/andybalholm/brotli"
+	"github.com/klauspost/compress/snappy"
 	"github.com/klauspost/compress/zstd"
+	"github.com/pierrec/lz4/v4"
+	"github.com/ulikunitz/xz"
 
 	"github.com/AlexAslan/streamio"
+	"github.com/AlexAslan/streamio/internal/sniff"
 )
 
 // fileWriterBufSize is the buffered writer's size: large enough that a 20,000-row NDJSON fixture
@@ -47,28 +51,19 @@ type fileWriter struct {
 }
 
 // outputCompression resolves --out-compression against path's extension: "" or "auto" follows the
-// extension (.gz/.gzip, .zst/.zstd), anything else is taken literally.
+// extension, anything else is taken literally. bzip2 is rejected: it can be read but not written.
 func outputCompression(flag, path string) (streamio.Compression, error) {
-	switch strings.ToLower(flag) {
-	case "", "auto":
-		lower := strings.ToLower(path)
-		switch {
-		case strings.HasSuffix(lower, ".gz"), strings.HasSuffix(lower, ".gzip"):
-			return streamio.CompressionGzip, nil
-		case strings.HasSuffix(lower, ".zst"), strings.HasSuffix(lower, ".zstd"):
-			return streamio.CompressionZstd, nil
-		default:
-			return streamio.CompressionNone, nil
-		}
-	case "none":
-		return streamio.CompressionNone, nil
-	case "gzip":
-		return streamio.CompressionGzip, nil
-	case "zstd":
-		return streamio.CompressionZstd, nil
-	default:
-		return "", fmt.Errorf("%w: %q", errUnknownCompression, flag)
+	comp, err := parseCompression(flag)
+	if err != nil {
+		return "", err
 	}
+	if comp == streamio.CompressionAuto {
+		_, comp = sniff.StripCompressionExt(path)
+	}
+	if comp == streamio.CompressionBzip2 {
+		return "", errBzip2WriteUnsupported
+	}
+	return comp, nil
 }
 
 // newFileWriter creates (or truncates) path and returns a fileWriter appending to it, compressed
@@ -102,6 +97,19 @@ func newFileWriter(path, compressionFlag string) (*fileWriter, error) {
 			return nil, fmt.Errorf("creating zstd writer for %s: %w", path, zerr)
 		}
 		codec = zw
+	case streamio.CompressionXZ:
+		xw, xerr := xz.NewWriter(fileBuf)
+		if xerr != nil {
+			_ = f.Close()
+			return nil, fmt.Errorf("creating xz writer for %s: %w", path, xerr)
+		}
+		codec = xw
+	case streamio.CompressionLZ4:
+		codec = lz4.NewWriter(fileBuf)
+	case streamio.CompressionSnappy:
+		codec = snappy.NewBufferedWriter(fileBuf)
+	case streamio.CompressionBrotli:
+		codec = brotli.NewWriter(fileBuf)
 	default:
 		_ = f.Close()
 		return nil, fmt.Errorf("%w: %q", errUnknownCompression, string(comp))

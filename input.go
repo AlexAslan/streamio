@@ -23,6 +23,16 @@ const (
 	CompressionGzip = options.CompressionGzip
 	// CompressionZstd reads the file as a Zstandard stream.
 	CompressionZstd = options.CompressionZstd
+	// CompressionBzip2 reads the file as a bzip2 stream.
+	CompressionBzip2 = options.CompressionBzip2
+	// CompressionXZ reads the file as an xz stream.
+	CompressionXZ = options.CompressionXZ
+	// CompressionLZ4 reads the file as an LZ4 frame stream.
+	CompressionLZ4 = options.CompressionLZ4
+	// CompressionSnappy reads the file as a framed Snappy stream.
+	CompressionSnappy = options.CompressionSnappy
+	// CompressionBrotli reads the file as a Brotli stream; never auto-detected from contents.
+	CompressionBrotli = options.CompressionBrotli
 )
 
 // ErrUnknownFormat is returned when an input's contents match no supported format and its
@@ -32,7 +42,7 @@ var ErrUnknownFormat = sniff.ErrUnknownFormat
 // ErrDecompressedTooLarge is returned when a compressed input expands past WithMaxDecompressedSize.
 var ErrDecompressedTooLarge = decompress.ErrTooLarge
 
-// DetectFormat returns src's format from its contents, seeing through gzip and zstd compression.
+// DetectFormat returns src's format from its contents, seeing through compression.
 // The name's extension is only consulted when the contents leave the answer open.
 func DetectFormat(src Source) (Format, error) {
 	return sniffSource(src)
@@ -45,7 +55,7 @@ func sniffSource(src Source) (Format, error) {
 		return "", err
 	}
 
-	comp := sniff.Compression(head)
+	comp := sniff.Detect(head, src.Name)
 
 	name := src.Name
 	if comp != CompressionNone {
@@ -98,7 +108,7 @@ func openInput(ctx context.Context, src Source, cfg *options.Config) (Source, fu
 	}
 	comp := cfg.InputCompression
 	if comp == CompressionAuto {
-		comp = sniff.Compression(head)
+		comp = sniff.Detect(head, src.Name)
 	}
 
 	release := noop

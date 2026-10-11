@@ -23,12 +23,29 @@ const (
 
 	// CompressionZstd reads the file as a Zstandard stream.
 	CompressionZstd Compression = "zstd"
+
+	// CompressionBzip2 reads the file as a bzip2 stream. Read-only: there is no bzip2 writer.
+	CompressionBzip2 Compression = "bzip2"
+
+	// CompressionXZ reads the file as an xz stream.
+	CompressionXZ Compression = "xz"
+
+	// CompressionLZ4 reads the file as an LZ4 frame stream.
+	CompressionLZ4 Compression = "lz4"
+
+	// CompressionSnappy reads the file as a framed Snappy stream (the .sz / .snappy stream format).
+	CompressionSnappy Compression = "snappy"
+
+	// CompressionBrotli reads the file as a Brotli stream. Brotli has no magic number, so it is
+	// never auto-detected from contents: only from a .br extension or by naming it explicitly.
+	CompressionBrotli Compression = "brotli"
 )
 
 // Valid reports whether c is one of the named compressions or the auto-detect zero value.
 func (c Compression) Valid() bool {
 	switch c {
-	case CompressionAuto, CompressionNone, CompressionGzip, CompressionZstd:
+	case CompressionAuto, CompressionNone, CompressionGzip, CompressionZstd,
+		CompressionBzip2, CompressionXZ, CompressionLZ4, CompressionSnappy, CompressionBrotli:
 		return true
 	default:
 		return false

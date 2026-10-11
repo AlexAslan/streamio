@@ -15,7 +15,14 @@ func TestCompression(t *testing.T) {
 
 	assert.Equal(t, options.CompressionGzip, sniff.Compression([]byte{0x1f, 0x8b, 0x08}))
 	assert.Equal(t, options.CompressionZstd, sniff.Compression([]byte{0x28, 0xb5, 0x2f, 0xfd, 0x00}))
+	assert.Equal(t, options.CompressionXZ, sniff.Compression([]byte("\xfd7zXZ\x00\x00\x04")))
+	assert.Equal(t, options.CompressionLZ4, sniff.Compression([]byte{0x04, 0x22, 0x4d, 0x18, 0x64}))
+	assert.Equal(t, options.CompressionSnappy, sniff.Compression([]byte("\xff\x06\x00\x00sNaPpY\x01")))
+	assert.Equal(t, options.CompressionBzip2, sniff.Compression([]byte("BZh91AY&SY\x00")))
 	assert.Equal(t, options.CompressionNone, sniff.Compression([]byte(`{"a":1}`)))
+	// Text that merely begins like the bzip2 magic is not bzip2.
+	assert.Equal(t, options.CompressionNone, sniff.Compression([]byte("BZh, the header\n")))
+	assert.Equal(t, options.CompressionNone, sniff.Compression([]byte("BZh01AY&SY")))
 	assert.Equal(t, options.CompressionNone, sniff.Compression(nil))
 }
 
@@ -119,6 +126,15 @@ func TestStripCompressionExt(t *testing.T) {
 	assert.Equal(t, "a.ndjson", name)
 	assert.Equal(t, options.CompressionZstd, c)
 
+	for ext, want := range map[string]options.Compression{
+		".bz2": options.CompressionBzip2, ".xz": options.CompressionXZ, ".lz4": options.CompressionLZ4,
+		".sz": options.CompressionSnappy, ".snappy": options.CompressionSnappy, ".br": options.CompressionBrotli,
+	} {
+		name, c = sniff.StripCompressionExt("dir/a.csv" + ext)
+		assert.Equal(t, "dir/a.csv", name, ext)
+		assert.Equal(t, want, c, ext)
+	}
+
 	name, c = sniff.StripCompressionExt("a.csv")
 	assert.Equal(t, "a.csv", name)
 	assert.Equal(t, options.CompressionNone, c)
@@ -143,4 +159,14 @@ func FuzzFormat(f *testing.F) {
 			require.Equal(t, options.OutputFormat(hint), got)
 		}
 	})
+}
+
+func TestDetect(t *testing.T) {
+	t.Parallel()
+
+	// Magic wins over a misleading name, and a name alone is trusted only for magic-less codecs.
+	assert.Equal(t, options.CompressionGzip, sniff.Detect([]byte{0x1f, 0x8b}, "a.csv"))
+	assert.Equal(t, options.CompressionNone, sniff.Detect([]byte("id,name\n"), "a.csv.gz"))
+	assert.Equal(t, options.CompressionBrotli, sniff.Detect([]byte("\x1b\x0a\x00"), "a.csv.br"))
+	assert.Equal(t, options.CompressionNone, sniff.Detect([]byte("id,name\n"), "a.csv"))
 }
