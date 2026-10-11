@@ -15,6 +15,8 @@
 | `WithCSVDelimiter(r)` | `,` for CSV, `\t` for TSV | Field delimiter for CSV/TSV input and output. |
 | `WithCSVHasHeader(b)` | `false` | Whether a CSV/TSV file's first row names its columns. |
 | `WithSingleFileOutput(b)` | `false` | One continuous output document for the whole run instead of one per batch (Parquet, CSV/TSV, Arrow). |
+| `WithSampling(spec)` | none | Keep a deterministic subset by hash of a key: a rate, a range, or per-stratum rates (see [sampling.md](sampling.md)). Forces the record path. |
+| `WithRowFilter(f)` / `WithRecordTransform(f)` | none | Custom per-record stages built from per-worker factories (see [stages.md](stages.md)). Force the record path. |
 | `WithLogger(l)` | none | Receives a one-line summary when `ProcessFile` starts. |
 | `WithMaxRowErrors(n, onSkip)` | `0` | Rows allowed to fail and be skipped before the run fails (BigQuery-style `max_bad_records`). `0` fails on the first error. Applies to NDJSON and CSV/TSV field errors on the generic path only; CSV/TSV syntax errors and Parquet/Arrow decode errors are always fatal. `onSkip`, if set, is called per skipped row. |
 
