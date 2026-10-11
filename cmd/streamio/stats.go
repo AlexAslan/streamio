@@ -35,6 +35,7 @@ var errUnknownStatsOutput = errors.New("unknown output: want table or json")
 type statsFlags struct {
 	in            string
 	inFormat      string
+	inCompression string
 	output        string
 	csvDelimiter  string
 	columns       []string
@@ -55,9 +56,10 @@ func getStatsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "stats",
 		Short: "Profile a document file: record count, per-attribute fill rate, and top values",
-		Long: `Stats reads --in in one pass and reports the total record count and, for every attribute,
-how many records have a non-empty value (and what share of all records that is), how many distinct
-values it holds, and its --top most frequent values with their counts and shares.
+		Long: `Stats reads --in in one pass (decompressing gzip and zstd input transparently) and reports the
+total record count and, for every attribute, how many records have a non-empty value (and what
+share of all records that is), how many distinct values it holds, and its --top most frequent
+values with their counts and shares.
 
 An attribute is empty when it is missing, null, or a zero-length string; whitespace is not empty.
 Nested Parquet map entries are reported as dotted paths (attrs.key).
@@ -76,6 +78,8 @@ row, that order can vary between runs.`,
 
 	cmd.Flags().StringVar(&flags.in, "in", "", "input file path (required)")
 	cmd.Flags().StringVar(&flags.inFormat, "in-format", "", "override input format detection: json|parquet|csv|tsv|arrow")
+	cmd.Flags().StringVar(&flags.inCompression, "in-compression", "",
+		"override input compression detection: auto|none|gzip|zstd")
 	cmd.Flags().StringVar(&flags.output, "output", outputTable, "output rendering: table|json")
 	cmd.Flags().IntVar(&flags.top, "top", defaultStatsTop, "most frequent values to show per attribute")
 	cmd.Flags().IntVar(&flags.maxDistinct, "max-distinct", 0,
@@ -114,7 +118,20 @@ func buildStatsOptions(flags statsFlags) ([]streamio.Option, error) {
 		}
 		opts = append(opts, streamio.WithInputFormat(inFormat))
 	} else {
-		inFormat = streamio.DetectInputFormat(flags.in)
+		// Sniffed from the contents, like convert, so CSV options apply to a mislabeled file too.
+		detected, err := detectFileFormat(flags.in)
+		if err != nil {
+			return nil, err
+		}
+		inFormat = detected
+	}
+
+	if flags.inCompression != "" {
+		comp, err := parseCompression(flags.inCompression)
+		if err != nil {
+			return nil, fmt.Errorf("--in-compression: %w", err)
+		}
+		opts = append(opts, streamio.WithInputCompression(comp))
 	}
 
 	// Reuses convert's CSV flag handling; stats has no output format, so only the input matters.

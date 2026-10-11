@@ -23,11 +23,11 @@ type Config struct {
 	OptionErr           error
 	Logger              Logger
 	OnRowErrorSkip      func(err error)
-	InputFormat         OutputFormat
-	InputCompression    Compression
 	OutputFormat        OutputFormat
-	Run                 RunConfig
+	InputCompression    Compression
+	InputFormat         OutputFormat
 	Profile             ProfileConfig
+	Run                 RunConfig
 	MaxDecompressedSize int64
 	NDJSON              NDJSONConfig
 	Parquet             ParquetConfig

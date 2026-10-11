@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -121,5 +122,34 @@ func TestTruncate(t *testing.T) {
 		if got := truncate(tc.in, tc.n); got != tc.want {
 			t.Errorf("truncate(%q, %d) = %q, want %q", tc.in, tc.n, got, tc.want)
 		}
+	}
+}
+
+func TestRunStats_GzippedAndMislabeledInput(t *testing.T) {
+	dir := t.TempDir()
+
+	var zipped bytes.Buffer
+	zw := gzip.NewWriter(&zipped)
+	if _, err := zw.Write([]byte(statsCLIFixture)); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// CSV, gzipped, under a name that suggests neither.
+	in := filepath.Join(dir, "data.bin")
+	if err := os.WriteFile(in, zipped.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	err := runStats(context.Background(), &out, statsFlags{
+		in: in, output: "table", top: 3, csvHasHeader: true, maxValueWidth: 40,
+	})
+	if err != nil {
+		t.Fatalf("runStats: %v", err)
+	}
+	if !strings.Contains(out.String(), "75.0%") {
+		t.Errorf("table output missing the country fill rate:\n%s", out.String())
 	}
 }

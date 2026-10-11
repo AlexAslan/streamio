@@ -223,3 +223,26 @@ func TestProfileFile_MissingAttributeIsEmpty(t *testing.T) {
 	assert.Equal(t, int64(2), b.NonEmpty)
 	assert.InDelta(t, 50.0, b.Pct, 1e-9)
 }
+
+func TestProfileFile_CompressedAndMislabeledInput(t *testing.T) {
+	t.Parallel()
+
+	want, err := streamio.ProfileFile(context.Background(),
+		writeTemp(t, "plain.ndjson", []byte(statsNDJSON)))
+	require.NoError(t, err)
+
+	// Same data gzipped under a name with no format extension at all.
+	got, err := streamio.ProfileFile(context.Background(),
+		writeTemp(t, "data.gz", gzipBytes(t, statsNDJSON)))
+	require.NoError(t, err)
+	assert.Equal(t, byName(want), byName(got))
+	assert.Equal(t, want.Records, got.Records)
+
+	// CSV contents under an NDJSON name.
+	csv, err := streamio.ProfileFile(context.Background(),
+		writeTemp(t, "data.ndjson", []byte("id,name\n1,ann\n2,\n")),
+		streamio.WithCSVHasHeader(true))
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), csv.Records)
+	assert.Equal(t, int64(1), byName(csv)["name"].NonEmpty)
+}

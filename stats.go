@@ -69,7 +69,7 @@ func ProfileFile(ctx context.Context, path string, opts ...Option) (Profile, err
 // ProfileReaderAt summarizes src the same way ProfileFile does for an on-disk file.
 //
 // Every input format goes through the same canonical-record path ProcessFile uses, so a profile is
-// identical whichever format the same data arrives in. An attribute is "empty" when it is missing,
+// identical whichever format (and compression) the same data arrives in. An attribute is "empty" when it is missing,
 // null, or a zero-length string.
 func ProfileReaderAt(ctx context.Context, src Source, opts ...Option) (Profile, error) {
 	cfg := options.New(opts...)
@@ -77,11 +77,13 @@ func ProfileReaderAt(ctx context.Context, src Source, opts ...Option) (Profile, 
 		return Profile{}, cfg.OptionErr
 	}
 
-	in := cfg.InputFormat
-	if in == "" {
-		in = DetectInputFormat(src.Name)
-		cfg.InputFormat = in
+	// Resolves compression and format from the contents, exactly as ProcessReaderAt does.
+	src, release, err := openInput(ctx, src, &cfg)
+	if err != nil {
+		return Profile{}, err
 	}
+	defer func() { _ = release() }()
+	in := cfg.InputFormat
 
 	support, ok := formatSupportFor(in)
 	if !ok || support.newRecordDecoder == nil {
