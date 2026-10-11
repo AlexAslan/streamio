@@ -48,10 +48,22 @@ var ErrTooManyRowErrors = options.ErrTooManyRowErrors
 // error collected up to and including the one that exceeded it.
 type TooManyRowErrorsError = options.TooManyRowErrorsError
 
-// WithInputFormat sets the source file's format explicitly, instead of letting ProcessFile infer
-// it from the file extension.
+// WithInputFormat sets the source file's format explicitly, instead of letting ProcessFile detect
+// it from the file's contents.
 func WithInputFormat(f Format) Option {
 	return options.WithInputFormat(f)
+}
+
+// WithInputCompression sets the source file's compression explicitly, instead of letting
+// ProcessFile detect gzip or zstd from the file's leading bytes.
+func WithInputCompression(c Compression) Option {
+	return options.WithInputCompression(c)
+}
+
+// WithMaxDecompressedSize caps how many bytes a compressed input may expand to, guarding against
+// decompression bombs. n<=0 means no cap.
+func WithMaxDecompressedSize(n int64) Option {
+	return options.WithMaxDecompressedSize(n)
 }
 
 // WithOutputFormat sets the format documents are delivered in.

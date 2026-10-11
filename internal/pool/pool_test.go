@@ -126,6 +126,46 @@ func TestRunRaw_DecodeErrorPropagates(t *testing.T) {
 	}
 }
 
+// sendThenFailSource sends one document then fails, counting the sends that were accepted by the
+// pool's queue.
+type sendThenFailSource struct {
+	sent atomic.Int64
+}
+
+func (*sendThenFailSource) Close() error { return nil }
+
+func (s *sendThenFailSource) DecodeRaw(ctx context.Context, out chan<- [][]byte, _ *pool.DecodeStats) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case out <- [][]byte{[]byte("x")}:
+		s.sent.Add(1)
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return errDecode
+}
+
+// TestRunRaw_DecodeErrorStillDispatchesQueuedDocuments pins that a decode error does not discard a
+// document already accepted into the queue. Repeated, because the failure it guards against was a
+// race between the error's cancellation and the queued send, which only showed up occasionally.
+func TestRunRaw_DecodeErrorStillDispatchesQueuedDocuments(t *testing.T) {
+	for range 500 {
+		sink, count := collectingSink()
+		cfg := options.New(options.WithParallelWorkers(2))
+		src := &sendThenFailSource{}
+
+		_, err := pool.RunRaw(context.Background(), cfg, src, sink)
+		if !errors.Is(err, errDecode) {
+			t.Fatalf("got err %v, want errDecode", err)
+		}
+		if sent, got := int(src.sent.Load()), count(); got != sent {
+			t.Fatalf("dispatched %d documents, but %d were queued before the decode error", got, sent)
+		}
+	}
+}
+
 var errSink = errors.New("sink failure")
 
 func TestRunRaw_SinkErrorPropagatesAndStopsDecoding(t *testing.T) {

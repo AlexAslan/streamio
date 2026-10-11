@@ -4,7 +4,6 @@ package pool
 
 import (
 	"context"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -55,28 +54,46 @@ func run(
 		dispatchNs atomic.Int64
 	)
 
-	g, gctx := errgroup.WithContext(ctx)
+	// Decode and dispatch are cancelled by different things. Dispatch stops only when the caller
+	// cancels or a sink fails, so a decode error never throws away batches already queued: the
+	// documents a worker produced before failing are still delivered, which is what makes a
+	// "rows before the bad one" outcome deterministic instead of a race between the error's
+	// cancellation and the queued send. Decode workers stop on any error, including dispatch's.
+	dispatchCtx, cancelDispatch := context.WithCancel(ctx)
+	defer cancelDispatch()
+
+	decodeGroup, decodeCtx := errgroup.WithContext(dispatchCtx)
+	for worker := range decodeWorkers {
+		decodeGroup.Go(func() error { return decode(decodeCtx, worker, out, &stats) })
+	}
 
 	// Closing out once every decode worker has returned is what lets dispatch workers' range
 	// loops end instead of blocking forever.
-	var decodeWg sync.WaitGroup
-	for worker := range decodeWorkers {
-		decodeWg.Add(1)
-		g.Go(func() error {
-			defer decodeWg.Done()
-			return decode(gctx, worker, out, &stats)
-		})
-	}
+	var decodeErr error
+	decodeDone := make(chan struct{})
 	go func() {
-		decodeWg.Wait()
+		defer close(decodeDone)
+		decodeErr = decodeGroup.Wait()
 		close(out)
 	}()
 
+	var dispatchGroup errgroup.Group
 	for range cfg.Run.Workers {
-		g.Go(func() error { return dispatchLoop(gctx, out, sink, &dispatched, &dispatchNs) })
+		dispatchGroup.Go(func() error {
+			err := dispatchLoop(dispatchCtx, out, sink, &dispatched, &dispatchNs)
+			if err != nil {
+				cancelDispatch()
+			}
+			return err
+		})
 	}
 
-	err := g.Wait()
+	// A dispatch failure is the root cause when both fail: it is what cancelled the decoders.
+	err := dispatchGroup.Wait()
+	<-decodeDone
+	if err == nil {
+		err = decodeErr
+	}
 
 	rowsRead := stats.Records.Load()
 	if rowsRead == 0 {

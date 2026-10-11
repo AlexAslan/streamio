@@ -2,9 +2,12 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -526,7 +529,7 @@ func TestFileWriter_ConcurrentWritesDoNotInterleave(t *testing.T) {
 	)
 
 	path := filepath.Join(t.TempDir(), "concurrent.out")
-	w, err := newFileWriter(path)
+	w, err := newFileWriter(path, "")
 	if err != nil {
 		t.Fatalf("newFileWriter: %v", err)
 	}
@@ -568,5 +571,94 @@ func TestFileWriter_ConcurrentWritesDoNotInterleave(t *testing.T) {
 	if want := writers * perGoroutine; len(seen) != want {
 		t.Fatalf("saw %d distinct documents, want %d — some were split or merged by interleaving",
 			len(seen), want)
+	}
+}
+
+// readGzip returns path's decompressed contents.
+func readGzip(tb testing.TB, path string) string {
+	tb.Helper()
+
+	f, err := os.Open(path)
+	if err != nil {
+		tb.Fatalf("open %s: %v", path, err)
+	}
+	defer f.Close()
+
+	zr, err := gzip.NewReader(f)
+	if err != nil {
+		tb.Fatalf("gzip reader for %s: %v", path, err)
+	}
+	b, err := io.ReadAll(zr)
+	if err != nil {
+		tb.Fatalf("reading %s: %v", path, err)
+	}
+	return string(b)
+}
+
+func TestRunConvert_GzipOutputFromExtension(t *testing.T) {
+	const rows = 12
+	in := writeNDJSONFixture(t, rows)
+	out := filepath.Join(t.TempDir(), "out.json.gz")
+
+	if err := runConvert(context.Background(), convertFlags{in: in, out: out}, "json"); err != nil {
+		t.Fatalf("runConvert: %v", err)
+	}
+
+	if got := strings.Count(readGzip(t, out), "\n"); got != rows {
+		t.Errorf("decompressed output has %d lines, want %d", got, rows)
+	}
+}
+
+// TestRunConvert_CompressedRoundTrip converts NDJSON to gzipped NDJSON and back, which exercises
+// output compression, input compression detection, and content sniffing on a name with no format
+// extension.
+func TestRunConvert_CompressedRoundTrip(t *testing.T) {
+	const rows = 30
+	in := writeNDJSONFixture(t, rows)
+	dir := t.TempDir()
+	compressed := filepath.Join(dir, "mid.gz")
+	back := filepath.Join(dir, "back.json")
+
+	if err := runConvert(context.Background(), convertFlags{in: in, out: compressed}, "json"); err != nil {
+		t.Fatalf("first convert: %v", err)
+	}
+	if err := runConvert(context.Background(), convertFlags{in: compressed, out: back}, "json"); err != nil {
+		t.Fatalf("second convert: %v", err)
+	}
+
+	if got := countNDJSONLines(t, back); got != rows {
+		t.Errorf("round-tripped output has %d lines, want %d", got, rows)
+	}
+}
+
+func TestRunConvert_SniffsCSVWithMisleadingExtension(t *testing.T) {
+	dir := t.TempDir()
+	in := filepath.Join(dir, "data.json")
+	if err := os.WriteFile(in, []byte("id,name\n1,ann\n2,bob\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(dir, "out.json")
+
+	err := runConvert(context.Background(), convertFlags{in: in, out: out, csvHasHeader: true}, "json")
+	if err != nil {
+		t.Fatalf("runConvert: %v", err)
+	}
+	if got := countNDJSONLines(t, out); got != 2 {
+		t.Errorf("output has %d lines, want 2", got)
+	}
+}
+
+func TestRunConvert_UnknownCompressionRejected(t *testing.T) {
+	in := writeNDJSONFixture(t, 1)
+	out := filepath.Join(t.TempDir(), "out.json")
+
+	err := runConvert(context.Background(), convertFlags{in: in, out: out, outCompression: "brotli"}, "json")
+	if !errors.Is(err, errUnknownCompression) {
+		t.Errorf("err = %v, want errUnknownCompression", err)
+	}
+
+	err = runConvert(context.Background(), convertFlags{in: in, out: out, inCompression: "brotli"}, "json")
+	if !errors.Is(err, errUnknownCompression) {
+		t.Errorf("err = %v, want errUnknownCompression", err)
 	}
 }

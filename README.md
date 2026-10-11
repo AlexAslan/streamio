@@ -32,11 +32,18 @@ go install github.com/AlexAslan/streamio/cmd/streamio@latest
 
 ## Getting started
 
-Convert a file (output format defaults to `json`; input format is detected from the file
-extension):
+Convert a file (output format defaults to `json`; input format and compression are detected from
+the file's contents, with the extension only breaking ties):
 
 ```
 ./streamio convert --in data.ndjson --out data.parquet --out-format parquet
+```
+
+gzip and zstd inputs are decompressed transparently, and an `--out` ending in `.gz` or `.zst` is
+compressed the same way:
+
+```
+./streamio convert --in data.csv.gz --out data.json.zst --csv-has-header
 ```
 
 `--out-format` accepts `json`, `parquet`, `csv`, `tsv`, or `arrow`. See `./streamio convert --help`
