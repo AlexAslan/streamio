@@ -9,16 +9,24 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func main() {
+// newRootCmd builds the streamio command tree.
+//
+// Errors are silenced here and printed once by main: cobra would otherwise print "Error: ..." and
+// main would print the same message again.
+func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
-		Use:   "streamio",
-		Short: "Convert and profile document files (NDJSON, Parquet, CSV, TSV, Arrow IPC)",
+		Use:           "streamio",
+		Short:         "Convert and profile document files (NDJSON, Parquet, CSV, TSV, Arrow IPC)",
+		SilenceErrors: true,
 	}
 	root.AddCommand(getConvertCmd())
 	root.AddCommand(getStatsCmd())
+	return root
+}
 
-	if err := root.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+func main() {
+	if err := newRootCmd().Execute(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 }
