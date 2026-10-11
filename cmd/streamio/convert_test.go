@@ -652,13 +652,52 @@ func TestRunConvert_UnknownCompressionRejected(t *testing.T) {
 	in := writeNDJSONFixture(t, 1)
 	out := filepath.Join(t.TempDir(), "out.json")
 
-	err := runConvert(context.Background(), convertFlags{in: in, out: out, outCompression: "brotli"}, "json")
+	err := runConvert(context.Background(), convertFlags{in: in, out: out, outCompression: "lzma"}, "json")
 	if !errors.Is(err, errUnknownCompression) {
 		t.Errorf("err = %v, want errUnknownCompression", err)
 	}
 
-	err = runConvert(context.Background(), convertFlags{in: in, out: out, inCompression: "brotli"}, "json")
+	err = runConvert(context.Background(), convertFlags{in: in, out: out, inCompression: "lzma"}, "json")
 	if !errors.Is(err, errUnknownCompression) {
 		t.Errorf("err = %v, want errUnknownCompression", err)
+	}
+}
+
+// TestRunConvert_EveryOutputCodecRoundTrips writes each supported output codec, picked by --out's
+// extension, and reads it back through input detection.
+func TestRunConvert_EveryOutputCodecRoundTrips(t *testing.T) {
+	for _, ext := range []string{"gz", "zst", "xz", "lz4", "sz", "br"} {
+		t.Run(ext, func(t *testing.T) {
+			const rows = 40
+			in := writeNDJSONFixture(t, rows)
+			dir := t.TempDir()
+			compressed := filepath.Join(dir, "mid.json."+ext)
+			back := filepath.Join(dir, "back.json")
+
+			if err := runConvert(context.Background(), convertFlags{in: in, out: compressed}, "json"); err != nil {
+				t.Fatalf("compressing: %v", err)
+			}
+			if err := runConvert(context.Background(), convertFlags{in: compressed, out: back}, "json"); err != nil {
+				t.Fatalf("decompressing: %v", err)
+			}
+			if got := countNDJSONLines(t, back); got != rows {
+				t.Errorf("round-tripped output has %d lines, want %d", got, rows)
+			}
+		})
+	}
+}
+
+func TestRunConvert_Bzip2OutputRejected(t *testing.T) {
+	in := writeNDJSONFixture(t, 1)
+	dir := t.TempDir()
+
+	for _, flags := range []convertFlags{
+		{in: in, out: filepath.Join(dir, "a.json.bz2")},
+		{in: in, out: filepath.Join(dir, "b.json"), outCompression: "bzip2"},
+	} {
+		err := runConvert(context.Background(), flags, "json")
+		if !errors.Is(err, errBzip2WriteUnsupported) {
+			t.Errorf("out %s: err = %v, want errBzip2WriteUnsupported", flags.out, err)
+		}
 	}
 }

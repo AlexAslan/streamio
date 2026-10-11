@@ -39,8 +39,9 @@ the file's contents, with the extension only breaking ties):
 ./streamio convert --in data.ndjson --out data.parquet --out-format parquet
 ```
 
-gzip and zstd inputs are decompressed transparently, and an `--out` ending in `.gz` or `.zst` is
-compressed the same way:
+Compressed inputs (gzip, zstd, bzip2, xz, LZ4, Snappy, Brotli) are decompressed transparently, and
+an `--out` ending in `.gz`, `.zst`, `.xz`, `.lz4`, `.sz` or `.br` is compressed the same way. bzip2
+is input-only, and Brotli (which has no magic number) is recognized by its `.br` extension:
 
 ```
 ./streamio convert --in data.csv.gz --out data.json.zst --csv-has-header

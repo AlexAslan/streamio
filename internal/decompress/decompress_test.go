@@ -4,14 +4,19 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/hex"
 	"io"
 	"os"
 	"strings"
 	"testing"
 
+	"github.com/andybalholm/brotli"
+	"github.com/klauspost/compress/snappy"
 	"github.com/klauspost/compress/zstd"
+	"github.com/pierrec/lz4/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/ulikunitz/xz"
 
 	"github.com/AlexAslan/streamio/internal/decompress"
 	"github.com/AlexAslan/streamio/internal/options"
@@ -132,4 +137,97 @@ func TestOpen_ContextCancelled(t *testing.T) {
 
 	_, _, err := decompress.Open(ctx, source(gz(t, payload)), options.CompressionGzip, decompress.Limits{})
 	require.ErrorIs(t, err, context.Canceled)
+}
+
+// bzip2Payload is payload compressed by the reference bzip2 tool; the Go ecosystem has no bzip2
+// writer to generate it with.
+const bzip2Payload = "425a6839314159265359a9bf734400000759000010000430003623a0002281e23210340d04d03" +
+	"47414e38211d782ee48a70a121537ee6880"
+
+// closeWriter is an io.WriteCloser every codec's writer satisfies.
+type closeWriter interface {
+	io.Writer
+	io.Closer
+}
+
+func encode(tb testing.TB, s string, newWriter func(io.Writer) closeWriter) []byte {
+	tb.Helper()
+
+	var b bytes.Buffer
+	w := newWriter(&b)
+	_, err := w.Write([]byte(s))
+	require.NoError(tb, err)
+	require.NoError(tb, w.Close())
+	return b.Bytes()
+}
+
+func TestOpen_EveryCodec(t *testing.T) {
+	t.Parallel()
+
+	bz, err := hex.DecodeString(bzip2Payload)
+	require.NoError(t, err)
+
+	cases := []struct {
+		name string
+		c    options.Compression
+		data []byte
+	}{
+		{"bzip2", options.CompressionBzip2, bz},
+		{"xz", options.CompressionXZ, encode(t, payload, func(w io.Writer) closeWriter {
+			xw, xerr := xz.NewWriter(w)
+			require.NoError(t, xerr)
+			return xw
+		})},
+		{"lz4", options.CompressionLZ4, encode(t, payload, func(w io.Writer) closeWriter {
+			return lz4.NewWriter(w)
+		})},
+		{"snappy", options.CompressionSnappy, encode(t, payload, func(w io.Writer) closeWriter {
+			return snappy.NewBufferedWriter(w)
+		})},
+		{"brotli", options.CompressionBrotli, encode(t, payload, func(w io.Writer) closeWriter {
+			return brotli.NewWriter(w)
+		})},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			src, closeFn, openErr := decompress.Open(context.Background(), source(tc.data), tc.c, decompress.Limits{})
+			require.NoError(t, openErr)
+			t.Cleanup(func() { require.NoError(t, closeFn()) })
+
+			assert.Equal(t, payload, readAll(t, src))
+		})
+	}
+}
+
+func TestOpen_SpoolsEveryCodec(t *testing.T) {
+	t.Parallel()
+
+	big := strings.Repeat("abcdefghij\n", 2000)
+	cases := []struct {
+		newWriter func(io.Writer) closeWriter
+		name      string
+		c         options.Compression
+	}{
+		{func(w io.Writer) closeWriter { return lz4.NewWriter(w) }, "lz4", options.CompressionLZ4},
+		{func(w io.Writer) closeWriter { return snappy.NewBufferedWriter(w) }, "snappy", options.CompressionSnappy},
+		{func(w io.Writer) closeWriter { return brotli.NewWriter(w) }, "brotli", options.CompressionBrotli},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			src, closeFn, err := decompress.Open(context.Background(),
+				source(encode(t, big, tc.newWriter)), tc.c, decompress.Limits{MemoryLimit: 100})
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, closeFn()) })
+
+			_, isFile := src.Reader.(*os.File)
+			assert.True(t, isFile)
+			assert.Equal(t, big, readAll(t, src))
+		})
+	}
 }

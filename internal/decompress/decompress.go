@@ -1,9 +1,10 @@
-// Package decompress turns a gzip- or zstd-compressed source into the sized, randomly-addressable
-// options.Source every format's decoder needs.
+// Package decompress turns a compressed source (gzip, zstd, bzip2, xz, LZ4, Snappy, or Brotli)
+// into the sized, randomly-addressable options.Source every format's decoder needs.
 package decompress
 
 import (
 	"bytes"
+	"compress/bzip2"
 	"compress/gzip"
 	"context"
 	"errors"
@@ -11,7 +12,11 @@ import (
 	"io"
 	"os"
 
+	"github.com/andybalholm/brotli"
+	"github.com/klauspost/compress/snappy"
 	"github.com/klauspost/compress/zstd"
+	"github.com/pierrec/lz4/v4"
+	"github.com/ulikunitz/xz"
 
 	"github.com/AlexAslan/streamio/internal/options"
 )
@@ -49,6 +54,20 @@ func NewReader(r io.Reader, c options.Compression) (io.ReadCloser, error) {
 			return nil, fmt.Errorf("opening zstd stream: %w", err)
 		}
 		return zstdReadCloser{zr}, nil
+	case options.CompressionBzip2:
+		return io.NopCloser(bzip2.NewReader(r)), nil
+	case options.CompressionLZ4:
+		return io.NopCloser(lz4.NewReader(r)), nil
+	case options.CompressionSnappy:
+		return io.NopCloser(snappy.NewReader(r)), nil
+	case options.CompressionBrotli:
+		return io.NopCloser(brotli.NewReader(r)), nil
+	case options.CompressionXZ:
+		xr, err := xz.NewReader(r)
+		if err != nil {
+			return nil, fmt.Errorf("opening xz stream: %w", err)
+		}
+		return io.NopCloser(xr), nil
 	case options.CompressionAuto, options.CompressionNone:
 		return nil, ErrNotCompressed
 	default:
