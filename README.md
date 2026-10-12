@@ -59,6 +59,15 @@ frequent values:
 for every flag, including CSV/TSV delimiter and header options, batch/worker sizing, and
 `--max-row-errors`.
 
+Keep only matching records:
+
+```
+./streamio convert --in events.ndjson --out errors.ndjson \
+    --where "level in ('ERROR', 'FATAL') and not trace_id is empty"
+```
+
+See [docs/where.md](docs/where.md) for the grammar and how empty and mistyped values are handled.
+
 For many more worked examples (formats, detection, every compression codec, `stats`, bad rows, and the Go API), see [docs/examples.md](docs/examples.md).
 
 Custom row filters, record transforms and record-level passes are available as an experimental

@@ -37,17 +37,19 @@ var errNegativeMaxRowErrors = errors.New("--max-row-errors must not be negative"
 // convertFlags holds the convert subcommand's flag values. outFormat is passed alongside these
 // rather than folded in, since runConvert needs it before the rest are turned into options.
 type convertFlags struct {
-	in, out        string
+	out            string
 	inFormat       string
 	inCompression  string
 	outCompression string
 	csvDelimiter   string
+	in             string
+	where          whereFlags
 	readBufferSize int
-	batchSize      int
 	workers        int
 	chunkSize      int
 	maxOpenReaders int
 	maxRowErrors   int
+	batchSize      int
 	csvHasHeader   bool
 }
 
@@ -90,6 +92,7 @@ and CSV/TSV field errors — a CSV/TSV syntax error (e.g. an unterminated quoted
 Parquet decode error always fail the run regardless of --max-row-errors.`,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			markWhereSet(cmd, &flags.where)
 			return runConvert(cmd.Context(), flags, outFormat)
 		},
 	}
@@ -114,6 +117,8 @@ Parquet decode error always fail the run regardless of --max-row-errors.`,
 		"CSV/TSV first row names the columns rather than holding data")
 	cmd.Flags().IntVar(&flags.maxRowErrors, "max-row-errors", 0,
 		"rows allowed to fail and be skipped before the run fails (0 = fail on the first)")
+
+	registerWhereFlags(cmd, &flags.where)
 
 	for _, name := range []string{"in", "out"} {
 		if err := cmd.MarkFlagRequired(name); err != nil {
@@ -293,6 +298,12 @@ func buildConvertOptions(flags convertFlags, outFormat streamio.Format) ([]strea
 	}
 	opts = append(opts, csvOpts...)
 
+	whereOpts, err := whereOptions(flags.where)
+	if err != nil {
+		return nil, err
+	}
+	opts = append(opts, whereOpts...)
+
 	readOpts, err := readOptions(readSizes{
 		readBufferSize: flags.readBufferSize,
 		batchSize:      flags.batchSize,
@@ -360,6 +371,9 @@ func runConvert(ctx context.Context, flags convertFlags, outFormatFlag string) (
 
 	var result streamio.Result
 	result, err = streamio.ProcessFile(ctx, flags.in, handler, opts...)
+	// Reported whether or not the run succeeded: a failure may be a --where-strict error, and the
+	// other warnings still say why rows went missing.
+	warnWhere(os.Stderr, flags.where.expr, result.Stats.PredicateMisses, result.Stats.UnseenColumns)
 	if err != nil {
 		if errors.Is(err, parquetgo.ErrTooManyRowGroups) {
 			return fmt.Errorf(

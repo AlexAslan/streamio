@@ -86,6 +86,8 @@ func New(opts ...Option) Config {
 type DocumentHandler func(ctx context.Context, doc []byte) error
 
 // Stats reports what one ProcessFile call did.
+//
+//nolint:govet // Fields are grouped by meaning, with their docs, rather than packed by size.
 type Stats struct {
 	// RowsRead is how many input rows were decoded, regardless of how many documents they became.
 	RowsRead int64
@@ -94,6 +96,12 @@ type Stats struct {
 	RowsSkipped int64
 	// RowsFiltered is how many decoded rows a row filter dropped. Always zero without one.
 	RowsFiltered int64
+	// PredicateMisses is how many comparisons in a WithWhere expression found a value of the wrong
+	// type for their literal (a non-numeric string against a number) and so did not match.
+	PredicateMisses int64
+	// UnseenColumns lists the columns a WithWhere expression compares that no record had, which is
+	// usually a typo. It is empty when no rows were read.
+	UnseenColumns []string
 	// DocumentsDispatched is how many documents were handed to the caller's handler. It can differ
 	// from RowsRead when an encoder renders a whole batch as one document (Parquet) rather than one
 	// document per row (NDJSON).

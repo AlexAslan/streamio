@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"time"
 
 	"github.com/AlexAslan/streamio/internal/formatio"
@@ -65,10 +66,49 @@ func RunRecords(
 		}
 	}
 
-	return run(ctx, cfg, len(workers),
+	res, err := run(ctx, cfg, len(workers),
 		func(ctx context.Context, worker int, out chan<- [][]byte, stats *DecodeStats) error {
 			return workers[worker].decode(ctx, out, stats)
 		}, sink)
+
+	// Filters that count type misses report them once the workers are done.
+	for _, w := range workers {
+		for _, f := range w.filters {
+			if m, ok := f.(options.MissCounter); ok {
+				res.Stats.PredicateMisses += m.Misses()
+			}
+		}
+	}
+	if res.Stats.RowsRead > 0 {
+		res.Stats.UnseenColumns = unseenColumns(workers)
+	}
+	return res, err
+}
+
+// unseenColumns returns the columns any worker's filters compare that no worker saw in any record.
+func unseenColumns(workers []*recordWorker) []string {
+	referenced := make(map[string]bool)
+	for _, w := range workers {
+		for _, f := range w.filters {
+			cu, ok := f.(options.ColumnUser)
+			if !ok {
+				continue
+			}
+			names, found := cu.Columns()
+			for i, name := range names {
+				referenced[name] = referenced[name] || found[i]
+			}
+		}
+	}
+
+	var unseen []string
+	for name, seen := range referenced {
+		if !seen {
+			unseen = append(unseen, name)
+		}
+	}
+	slices.Sort(unseen)
+	return unseen
 }
 
 // splitDecoders asks dec for up to limit decoders over the same input, falling back to driving dec

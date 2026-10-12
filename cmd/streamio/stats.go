@@ -44,14 +44,15 @@ type statsFlags struct {
 	output        string
 	csvDelimiter  string
 	columns       []string
-	top           int
-	maxDistinct   int
+	where         whereFlags
 	maxValueWidth int
+	maxDistinct   int
 	workers       int
 	batchSize     int
 	chunkSize     int
 	maxOpenReader int
 	maxRowErrors  int
+	top           int
 	csvHasHeader  bool
 }
 
@@ -82,6 +83,7 @@ to record, that order can vary between runs. A file under one chunk (32 MiB by d
 a single worker; lower --chunk-size to spread a smaller file across workers.`,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			markWhereSet(cmd, &flags.where)
 			return runStats(cmd.Context(), os.Stdout, flags)
 		},
 	}
@@ -108,6 +110,8 @@ a single worker; lower --chunk-size to spread a smaller file across workers.`,
 		"CSV/TSV first row names the columns rather than holding data")
 	cmd.Flags().IntVar(&flags.maxRowErrors, "max-row-errors", 0,
 		"rows allowed to fail and be skipped before the run fails (0 = fail on the first)")
+
+	registerWhereFlags(cmd, &flags.where)
 
 	if err := cmd.MarkFlagRequired("in"); err != nil {
 		panic(fmt.Sprintf("stats: marking --in required: %v", err))
@@ -160,6 +164,12 @@ func buildStatsOptions(flags statsFlags) ([]streamio.Option, error) {
 		return nil, fmt.Errorf("%w: got %d", errInvalidTop, flags.top)
 	}
 
+	whereOpts, err := whereOptions(flags.where)
+	if err != nil {
+		return nil, err
+	}
+	opts = append(opts, whereOpts...)
+
 	readOpts, err := readOptions(readSizes{
 		batchSize:      flags.batchSize,
 		chunkSize:      flags.chunkSize,
@@ -205,6 +215,7 @@ func runStats(ctx context.Context, w io.Writer, flags statsFlags) error {
 		return fmt.Errorf("profiling %s: %w", flags.in, err)
 	}
 
+	warnWhere(os.Stderr, flags.where.expr, 0, prof.UnseenColumns)
 	for _, name := range missingColumns(flags.columns, prof) {
 		fmt.Fprintf(os.Stderr, "warning: --columns %q matched no attribute\n", name)
 	}
@@ -261,6 +272,9 @@ func renderStatsTable(w io.Writer, path string, prof streamio.Profile, maxWidth 
 	fmt.Fprintf(tw, "records:\t%d\n", prof.Records)
 	if prof.RowsSkipped > 0 {
 		fmt.Fprintf(tw, "skipped:\t%d\n", prof.RowsSkipped)
+	}
+	if prof.PredicateMisses > 0 {
+		fmt.Fprintf(tw, "where type misses:\t%d\n", prof.PredicateMisses)
 	}
 	fmt.Fprintf(tw, "attributes:\t%d\n\n", len(prof.Columns))
 
