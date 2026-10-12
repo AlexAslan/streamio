@@ -44,6 +44,8 @@ type convertFlags struct {
 	csvDelimiter   string
 	in             string
 	where          whereFlags
+
+	sample         sampleFlags
 	readBufferSize int
 	workers        int
 	chunkSize      int
@@ -119,6 +121,8 @@ Parquet decode error always fail the run regardless of --max-row-errors.`,
 		"rows allowed to fail and be skipped before the run fails (0 = fail on the first)")
 
 	registerWhereFlags(cmd, &flags.where)
+
+	registerSampleFlags(cmd, &flags.sample)
 
 	for _, name := range []string{"in", "out"} {
 		if err := cmd.MarkFlagRequired(name); err != nil {
@@ -304,6 +308,12 @@ func buildConvertOptions(flags convertFlags, outFormat streamio.Format) ([]strea
 	}
 	opts = append(opts, whereOpts...)
 
+	sampleOpts, err := sampleOptions(flags.sample)
+	if err != nil {
+		return nil, err
+	}
+	opts = append(opts, sampleOpts...)
+
 	readOpts, err := readOptions(readSizes{
 		readBufferSize: flags.readBufferSize,
 		batchSize:      flags.batchSize,
@@ -389,6 +399,8 @@ func runConvert(ctx context.Context, flags convertFlags, outFormatFlag string) (
 		}
 		return fmt.Errorf("converting %s to %s: %w", flags.in, flags.out, err)
 	}
+
+	warnMissingKey(os.Stderr, result.Stats.RowsMissingKey, flags.sample)
 
 	if result.Stats.RowsSkipped > 0 {
 		fmt.Fprintf(os.Stdout, "wrote %s: %d rows read, %d rows skipped, %d documents dispatched\n",

@@ -132,6 +132,12 @@ type ColumnUser interface {
 	Columns() (names []string, found []bool)
 }
 
+// MissingKeyCounter is implemented by a RowFilter that keys records and counts those that had no
+// value for any key column, so the run's Stats can surface a key that is not always present.
+type MissingKeyCounter interface {
+	MissingKeys() int64
+}
+
 // RowFilterFactory builds one RowFilter; it is called once per decode worker.
 type RowFilterFactory func() (RowFilter, error)
 

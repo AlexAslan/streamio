@@ -45,8 +45,10 @@ type statsFlags struct {
 	csvDelimiter  string
 	columns       []string
 	where         whereFlags
-	maxValueWidth int
+
+	sample        sampleFlags
 	maxDistinct   int
+	maxValueWidth int
 	workers       int
 	batchSize     int
 	chunkSize     int
@@ -113,6 +115,8 @@ a single worker; lower --chunk-size to spread a smaller file across workers.`,
 
 	registerWhereFlags(cmd, &flags.where)
 
+	registerSampleFlags(cmd, &flags.sample)
+
 	if err := cmd.MarkFlagRequired("in"); err != nil {
 		panic(fmt.Sprintf("stats: marking --in required: %v", err))
 	}
@@ -169,6 +173,12 @@ func buildStatsOptions(flags statsFlags) ([]streamio.Option, error) {
 		return nil, err
 	}
 	opts = append(opts, whereOpts...)
+
+	sampleOpts, err := sampleOptions(flags.sample)
+	if err != nil {
+		return nil, err
+	}
+	opts = append(opts, sampleOpts...)
 
 	readOpts, err := readOptions(readSizes{
 		batchSize:      flags.batchSize,
@@ -275,6 +285,9 @@ func renderStatsTable(w io.Writer, path string, prof streamio.Profile, maxWidth 
 	}
 	if prof.PredicateMisses > 0 {
 		fmt.Fprintf(tw, "where type misses:\t%d\n", prof.PredicateMisses)
+	}
+	if prof.RowsMissingKey > 0 {
+		fmt.Fprintf(tw, "no sample key:\t%d\n", prof.RowsMissingKey)
 	}
 	fmt.Fprintf(tw, "attributes:\t%d\n\n", len(prof.Columns))
 

@@ -68,6 +68,16 @@ Keep only matching records:
 
 See [docs/where.md](docs/where.md) for the grammar and how empty and mistyped values are handled.
 
+Keep a reproducible subset (the choice depends only on a seed and a key, so samples of related files
+still join):
+
+```
+./streamio convert --in orders.parquet --out orders.sample.parquet --out-format parquet \
+    --sample 1% --sample-key user_id --sample-seed 2026-q4
+```
+
+See [docs/sampling.md](docs/sampling.md) for ranges, per-stratum rates, and weights.
+
 For many more worked examples (formats, detection, every compression codec, `stats`, bad rows, and the Go API), see [docs/examples.md](docs/examples.md).
 
 Custom row filters, record transforms and record-level passes are available as an experimental

@@ -71,11 +71,14 @@ func RunRecords(
 			return workers[worker].decode(ctx, out, stats)
 		}, sink)
 
-	// Filters that count type misses report them once the workers are done.
+	// Filters that keep counters report them once the workers are done.
 	for _, w := range workers {
 		for _, f := range w.filters {
 			if m, ok := f.(options.MissCounter); ok {
 				res.Stats.PredicateMisses += m.Misses()
+			}
+			if m, ok := f.(options.MissingKeyCounter); ok {
+				res.Stats.RowsMissingKey += m.MissingKeys()
 			}
 		}
 	}
