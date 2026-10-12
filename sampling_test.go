@@ -19,32 +19,19 @@ import (
 	"github.com/AlexAslan/streamio/record"
 )
 
-// sampleIDs profiles-by-reading the "id" values of every kept document, sorted.
+// keptIDs returns the sorted "id" values of every record that reaches a consumer under opts, using
+// the mutex-guarded idCollector from where_test.go so it is safe at any worker count.
 func keptIDs(t *testing.T, path string, opts ...streamio.Option) []string {
 	t.Helper()
 
-	var ids []string
-	c := &idCollector{ids: &ids}
+	c := &idCollector{}
 	_, err := streamio.ConsumeFile(context.Background(), path,
 		func() (streamio.RecordConsumer, error) { return c, nil },
 		append([]streamio.Option{streamio.WithParallelWorkers(1)}, opts...)...)
 	require.NoError(t, err)
-	sort.Strings(ids)
-	return ids
-}
 
-type idCollector struct {
-	ids *[]string
-}
-
-func (c *idCollector) Consume(batch []record.Record) error {
-	for _, rec := range batch {
-		if v, ok := rec.Lookup("id"); ok {
-			text, _ := v.AppendText(nil)
-			*c.ids = append(*c.ids, string(text))
-		}
-	}
-	return nil
+	sort.Strings(c.ids)
+	return c.ids
 }
 
 func TestSampling_SameKeptSetForAnyWorkerCount(t *testing.T) {
@@ -369,4 +356,20 @@ func TestSampling_StatsReportsMissingKeys(t *testing.T) {
 		streamio.WithSampling(streamio.SamplingSpec{Seed: "s", Key: []string{"id"}, Rate: 0.5}))
 	require.NoError(t, err)
 	assert.Equal(t, int64(500), p.RowsMissingKey)
+}
+
+// TestSampling_ComposesWithWhere pins that the predicate runs first, so a sample is taken from the
+// records that pass it and never contains one that does not.
+func TestSampling_ComposesWithWhere(t *testing.T) {
+	t.Parallel()
+
+	path := writeTemp(t, "rows.ndjson", []byte(whereRows()))
+	spec := streamio.SamplingSpec{Seed: "w", Key: []string{"id"}, Rate: 0.5}
+
+	all := whereIDs(t, path, `country = 'US'`)
+	sampled := whereIDs(t, path, `country = 'US'`, streamio.WithSampling(spec))
+
+	assert.Less(t, len(sampled), len(all))
+	assert.NotEmpty(t, sampled)
+	assert.Subset(t, all, sampled)
 }

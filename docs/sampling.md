@@ -315,6 +315,7 @@ With `keep`, `--sample-weight` gives those rows weight 1, since they were not sa
 | `--sample-weight` and the file already has `_sample_weight` | The run fails: `sampling weight column already exists in the record: "_sample_weight"` |
 | `--sample-weight` with a plain rate | Every row gets the same weight, `1/rate` |
 | Empty `--sample-seed` | Allowed and deterministic, but the same for everyone; set one explicitly |
+| `--where` and a sampling flag together | `--where` runs first, so the sample is taken from the rows that pass it (`--where "country = 'US'" --sample 20%` kept a subset of the US rows only) |
 | Input is compressed or mislabeled | Handled before sampling, exactly as for `convert`: the sample is of the decoded records |
 
 ## Flag errors
