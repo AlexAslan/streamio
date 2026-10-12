@@ -11,6 +11,16 @@ per-worker `record.Arena` reset at the start of each batch. `ConsumeFile` reuses
 a consumer in place of the encoder, and `ProfileFile` is built on it. See
 [stages.md](stages.md) for the contract.
 
+## Preparers (first passes)
+
+Some components cannot decide from one record: an exact-size sample needs the N-th smallest hash of
+the whole input, and a per-stratum minimum needs each stratum's smallest hashes. Such a component
+registers a `Preparer` (with how many row filters precede it). Before the main run,
+`runPreparers` gives each one a pass built on the same decode pool, under the run's decode options
+and only the filters configured before it, and the component resolves its thresholds from what the
+workers collected. Per-worker collectors merge once, so nothing is shared on the hot path. Input is
+always a `ReaderAt`, which is what makes a second pass cheap.
+
 ## Input detection
 
 Before routing, `ProcessFile` resolves two things from the file's first 4 KiB:

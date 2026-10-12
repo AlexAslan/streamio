@@ -373,3 +373,152 @@ func TestSampling_ComposesWithWhere(t *testing.T) {
 	assert.NotEmpty(t, sampled)
 	assert.Subset(t, all, sampled)
 }
+
+func TestSampling_CountKeepsExactlyNKeysAtAnyWorkerCount(t *testing.T) {
+	t.Parallel()
+
+	path := writeNDJSONRows(t, 20_000)
+	for _, workers := range []int{1, 4} {
+		ids := keptIDs(t, path,
+			streamio.WithSampling(streamio.SamplingSpec{Seed: "s", Key: []string{"id"}, Count: 750}),
+			streamio.WithParallelWorkers(workers), streamio.WithChunkSize(16*1024))
+		assert.Len(t, ids, 750, "workers=%d", workers)
+	}
+
+	// The same keys no matter how the work was split.
+	one := keptIDs(t, path, streamio.WithSampling(
+		streamio.SamplingSpec{Seed: "s", Key: []string{"id"}, Count: 750}))
+	many := keptIDs(t, path, streamio.WithSampling(
+		streamio.SamplingSpec{Seed: "s", Key: []string{"id"}, Count: 750}),
+		streamio.WithParallelWorkers(8), streamio.WithChunkSize(8*1024))
+	assert.Equal(t, one, many)
+}
+
+func TestSampling_CountIsASubsetAsNGrows(t *testing.T) {
+	t.Parallel()
+
+	path := writeNDJSONRows(t, 5000)
+	small := keptIDs(t, path, streamio.WithSampling(streamio.SamplingSpec{Seed: "s", Key: []string{"id"}, Count: 100}))
+	large := keptIDs(t, path, streamio.WithSampling(streamio.SamplingSpec{Seed: "s", Key: []string{"id"}, Count: 400}))
+
+	assert.Subset(t, large, small)
+}
+
+func TestSampling_CountWorksOnCompressedInputAndProcessFile(t *testing.T) {
+	t.Parallel()
+
+	var sb strings.Builder
+	for i := range 3000 {
+		fmt.Fprintf(&sb, "{\"id\":%d}\n", i)
+	}
+	path := writeTemp(t, "ids.ndjson.gz", gzipBytes(t, sb.String()))
+
+	docs, res := collectDocs(t, path,
+		streamio.WithSampling(streamio.SamplingSpec{Seed: "s", Key: []string{"id"}, Count: 120}))
+	assert.Len(t, docs, 120)
+	assert.Equal(t, int64(3000), res.Stats.RowsRead, "the first pass is not counted as rows read")
+}
+
+// TestSampling_FirstPassSeesOnlyEarlierFilters pins what "exactly N" counts among: the rows that
+// reach the sampler. A filter configured before it narrows the candidates; one after it does not.
+func TestSampling_FirstPassSeesOnlyEarlierFilters(t *testing.T) {
+	t.Parallel()
+
+	path := writeNDJSONRows(t, 4000)
+	evens := func() (streamio.RowFilter, error) {
+		return idFilter{keep: func(id string) bool { return (id[len(id)-1]-'0')%2 == 0 }}, nil
+	}
+	spec := streamio.SamplingSpec{Seed: "s", Key: []string{"id"}, Count: 100}
+
+	before := keptIDs(t, path, streamio.WithRowFilter(evens), streamio.WithSampling(spec))
+	assert.Len(t, before, 100, "100 even ids: the sampler only ever saw evens")
+
+	after := keptIDs(t, path, streamio.WithSampling(spec), streamio.WithRowFilter(evens))
+	assert.Less(t, len(after), 100, "100 ids sampled first, then the filter thins them")
+}
+
+func TestSampling_MinPerStratumKeepsRareValues(t *testing.T) {
+	t.Parallel()
+
+	var sb strings.Builder
+	for i := range 30_000 {
+		tier := "common"
+		switch {
+		case i < 12:
+			tier = "rare"
+		case i < 15:
+			tier = "tiny"
+		}
+		fmt.Fprintf(&sb, "{\"id\":%d,\"tier\":%q}\n", i, tier)
+	}
+	path := writeTemp(t, "tiers.ndjson", []byte(sb.String()))
+
+	var mu sync.Mutex
+	kept := map[string]int{}
+	_, err := streamio.ProcessFile(context.Background(), path,
+		func(_ context.Context, doc []byte) error {
+			var d struct {
+				Tier string `json:"tier"`
+			}
+			if err := json.Unmarshal(doc, &d); err != nil {
+				return err
+			}
+			mu.Lock()
+			kept[d.Tier]++
+			mu.Unlock()
+			return nil
+		},
+		streamio.WithSampling(streamio.SamplingSpec{
+			Seed: "s", Key: []string{"id"}, StratifyBy: "tier", DefaultRate: 0.0005, MinPerStratum: 10,
+		}))
+	require.NoError(t, err)
+
+	assert.Equal(t, 10, kept["rare"], "exactly the minimum from a stratum of 12")
+	assert.Equal(t, 3, kept["tiny"], "a stratum under the minimum is kept whole")
+	assert.GreaterOrEqual(t, kept["common"], 10)
+	assert.Less(t, kept["common"], 60)
+}
+
+func TestSampling_StatsProfilesAnExactSample(t *testing.T) {
+	t.Parallel()
+
+	path := writeNDJSONRows(t, 8000)
+	p, err := streamio.ProfileFile(context.Background(), path,
+		streamio.WithSampling(streamio.SamplingSpec{Seed: "s", Key: []string{"id"}, Count: 321}))
+	require.NoError(t, err)
+	assert.Equal(t, int64(321), p.Records)
+}
+
+// TestSampling_CountIgnoresRowsTheMissingKeyPolicyDecides pins that a record kept or dropped by the
+// missing-key policy does not use up a slot of an exact-size sample.
+func TestSampling_CountIgnoresRowsTheMissingKeyPolicyDecides(t *testing.T) {
+	t.Parallel()
+
+	path := writeTemp(t, "sparse.ndjson", []byte(sparseNDJSON(4000)))
+	for _, policy := range []streamio.MissingKeyPolicy{streamio.MissingKeyKeep, streamio.MissingKeyDrop} {
+		var mu sync.Mutex
+		keyed, unkeyed := 0, 0
+		_, err := streamio.ProcessFile(context.Background(), path,
+			func(_ context.Context, doc []byte) error {
+				mu.Lock()
+				defer mu.Unlock()
+				if strings.Contains(string(doc), `"id"`) {
+					keyed++
+				} else {
+					unkeyed++
+				}
+				return nil
+			},
+			streamio.WithSampling(streamio.SamplingSpec{
+				Seed: "c", Key: []string{"id"}, Count: 100, OnMissingKey: policy,
+			}))
+		require.NoError(t, err)
+
+		assert.Equal(t, 100, keyed, "policy %s: exactly 100 keyed rows", policy)
+		if policy == streamio.MissingKeyKeep {
+			assert.Equal(t, 2000, unkeyed)
+		} else {
+			assert.Zero(t, unkeyed)
+		}
+	}
+}

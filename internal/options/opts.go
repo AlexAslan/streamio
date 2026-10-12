@@ -3,6 +3,7 @@
 package options
 
 import (
+	"context"
 	"io"
 
 	"github.com/AlexAslan/streamio/record"
@@ -21,6 +22,7 @@ type Source struct {
 type Config struct {
 	Transformer         Transformer
 	RowFilters          []RowFilterFactory
+	Preparers           []PreparerSlot
 	RecordTransforms    []RecordTransformFactory
 	OptionErr           error
 	Logger              Logger
@@ -136,6 +138,26 @@ type ColumnUser interface {
 // value for any key column, so the run's Stats can surface a key that is not always present.
 type MissingKeyCounter interface {
 	MissingKeys() int64
+}
+
+// PassFunc runs one pass over the input, handing each decode worker's batches to a consumer built
+// by newConsumer. It is what a Preparer uses to learn about the data before the main run.
+type PassFunc func(newConsumer func() (RecordConsumer, error)) error
+
+// Preparer is a pipeline component that needs a pass over the input before the main run, such as
+// an exact-size sample finding its hash threshold.
+type Preparer interface {
+	// Prepare runs pass as often as it needs and then configures the component for the main run.
+	// The pass sees the records that would reach the component: decoded, and filtered by every
+	// row filter configured before it.
+	Prepare(ctx context.Context, pass PassFunc) error
+}
+
+// PreparerSlot is a Preparer along with how many row filters were configured before it, which is
+// the filter prefix its pass runs under.
+type PreparerSlot struct {
+	Preparer    Preparer
+	FilterIndex int
 }
 
 // RowFilterFactory builds one RowFilter; it is called once per decode worker.
