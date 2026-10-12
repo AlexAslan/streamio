@@ -125,6 +125,13 @@ type MissCounter interface {
 	Misses() int64
 }
 
+// ColumnUser is implemented by a RowFilter that compares named columns and notes which of them any
+// record actually had, so a mistyped column name can be reported instead of silently matching
+// nothing.
+type ColumnUser interface {
+	Columns() (names []string, found []bool)
+}
+
 // RowFilterFactory builds one RowFilter; it is called once per decode worker.
 type RowFilterFactory func() (RowFilter, error)
 

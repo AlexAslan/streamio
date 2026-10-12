@@ -187,3 +187,62 @@ func TestWhere_ComposesWithCustomFilters(t *testing.T) {
 type rowFilterFunc func(record.Record) bool
 
 func (f rowFilterFunc) Keep(rec record.Record) (bool, error) { return f(rec), nil }
+
+func TestWhere_UnseenColumnsAreReported(t *testing.T) {
+	t.Parallel()
+
+	path := writeTemp(t, "rows.ndjson", []byte(whereRows()))
+
+	_, res := collectDocs(t, path, streamio.WithWhere(`nmae = 'x' and age > 1`))
+	assert.Equal(t, []string{"nmae"}, res.Stats.UnseenColumns)
+
+	_, res = collectDocs(t, path, streamio.WithWhere(`age > 18 and country = 'US'`))
+	assert.Empty(t, res.Stats.UnseenColumns)
+
+	// Asking whether a column is empty is how you test for one that may be absent, so it is not a typo.
+	_, res = collectDocs(t, path, streamio.WithWhere(`nmae is empty`))
+	assert.Empty(t, res.Stats.UnseenColumns)
+
+	p, err := streamio.ProfileFile(context.Background(), path, streamio.WithWhere(`nope = 1`))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"nope"}, p.UnseenColumns)
+}
+
+func TestWhere_NoRowsMeansNoUnseenReport(t *testing.T) {
+	t.Parallel()
+
+	path := writeTemp(t, "empty.ndjson", nil)
+	_, res := collectDocs(t, path, streamio.WithWhere(`anything = 1`))
+	assert.Empty(t, res.Stats.UnseenColumns, "with no rows every column is unseen, which says nothing")
+}
+
+func TestWhere_StrictErrorsAreMatchableAndNameTheReason(t *testing.T) {
+	t.Parallel()
+
+	path := writeTemp(t, "messy.ndjson", []byte("{\"age\":\"unknown\"}\n"))
+	_, err := streamio.ProcessFile(context.Background(), path,
+		func(context.Context, []byte) error { return nil }, streamio.WithWhereStrict(`age > 18`))
+
+	require.ErrorIs(t, err, streamio.ErrUncomparable)
+	require.ErrorContains(t, err, `"age"`)
+	require.ErrorContains(t, err, "is not a number")
+}
+
+func TestWhere_NonASCIIColumnNames(t *testing.T) {
+	t.Parallel()
+
+	path := writeTemp(t, "i18n.ndjson", []byte("{\"größe\":10}\n{\"größe\":3}\n"))
+	docs, _ := collectDocs(t, path, streamio.WithWhere(`größe > 5`))
+	assert.Len(t, docs, 1)
+}
+
+func TestWhere_TextIdentifiersAboveFloatPrecisionStayDistinct(t *testing.T) {
+	t.Parallel()
+
+	data := "{\"id\":\"9007199254740992\"}\n{\"id\":\"9007199254740993\"}\n"
+	path := writeTemp(t, "ids.ndjson", []byte(data))
+
+	docs, _ := collectDocs(t, path, streamio.WithWhere(`id = 9007199254740993`))
+	require.Len(t, docs, 1)
+	assert.Contains(t, docs[0], "993")
+}

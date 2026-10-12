@@ -83,6 +83,7 @@ to record, that order can vary between runs. A file under one chunk (32 MiB by d
 a single worker; lower --chunk-size to spread a smaller file across workers.`,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			markWhereSet(cmd, &flags.where)
 			return runStats(cmd.Context(), os.Stdout, flags)
 		},
 	}
@@ -214,6 +215,7 @@ func runStats(ctx context.Context, w io.Writer, flags statsFlags) error {
 		return fmt.Errorf("profiling %s: %w", flags.in, err)
 	}
 
+	warnWhere(os.Stderr, flags.where.expr, 0, prof.UnseenColumns)
 	for _, name := range missingColumns(flags.columns, prof) {
 		fmt.Fprintf(os.Stderr, "warning: --columns %q matched no attribute\n", name)
 	}

@@ -16,6 +16,9 @@ func (f filter) Keep(rec record.Record) (bool, error) { return f.ev.Match(rec) }
 // Misses reports the evaluator's type-mismatch count.
 func (f filter) Misses() int64 { return f.ev.Misses() }
 
+// Columns reports which compared columns this worker's records had.
+func (f filter) Columns() ([]string, []bool) { return f.ev.Columns() }
+
 // Option returns the pipeline option that keeps only records satisfying src, or the parse error.
 func Option(src string, strict bool) (options.Option, error) {
 	p, err := Compile(src, strict)

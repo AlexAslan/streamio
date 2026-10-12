@@ -11,23 +11,16 @@ import (
 // parse.
 var ErrInvalidWhere = expr.ErrSyntax
 
-// WithWhere keeps only records satisfying a predicate such as
+// ErrUncomparable is wrapped by the error WithWhereStrict fails a run with when a value has the
+// wrong type for its literal.
+var ErrUncomparable = expr.ErrUncomparable
+
+// WithWhere keeps only the records satisfying a predicate such as
+// `age >= 18 and country in ('US', 'GR') and not email is empty`.
 //
-//	age >= 18 and country in ('US', 'GR') and not email is empty
-//
-// Comparisons are =, !=, <, <=, >, >=; `in (...)`, `is [not] empty`, `contains` and `starts_with`
-// work on text; `and`, `or`, `not` and parentheses combine them. A literal's type decides the
-// comparison: a quoted string compares the value's text, a number compares numerically (text is
-// parsed, so a CSV column works), true and false compare booleans. Dotted names reach into nested
-// map entries, and `a.b` quoted in backticks names a column that contains a dot.
-//
-// A missing, null or empty value matches no comparison, so `not (x = 1)` holds for records with no
-// x. A value of the wrong type for its literal does not match and is counted in
-// Stats.PredicateMisses; WithWhereStrict fails the run instead.
-//
-// A filter makes a same-format conversion decode and re-encode instead of streaming raw bytes.
-// Filters apply in the order the options are given, so any later filter sees only the records
-// that pass.
+// The grammar, how a literal's type decides a comparison, and how empty and mistyped values are
+// handled are in docs/where.md. A value of the wrong type for its literal does not match and is
+// counted in Stats.PredicateMisses; WithWhereStrict fails the run instead.
 func WithWhere(expression string) Option {
 	return whereOption(expression, false)
 }

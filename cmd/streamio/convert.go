@@ -92,6 +92,7 @@ and CSV/TSV field errors — a CSV/TSV syntax error (e.g. an unterminated quoted
 Parquet decode error always fail the run regardless of --max-row-errors.`,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			markWhereSet(cmd, &flags.where)
 			return runConvert(cmd.Context(), flags, outFormat)
 		},
 	}
@@ -370,6 +371,9 @@ func runConvert(ctx context.Context, flags convertFlags, outFormatFlag string) (
 
 	var result streamio.Result
 	result, err = streamio.ProcessFile(ctx, flags.in, handler, opts...)
+	// Reported whether or not the run succeeded: a failure may be a --where-strict error, and the
+	// other warnings still say why rows went missing.
+	warnWhere(os.Stderr, flags.where.expr, result.Stats.PredicateMisses, result.Stats.UnseenColumns)
 	if err != nil {
 		if errors.Is(err, parquetgo.ErrTooManyRowGroups) {
 			return fmt.Errorf(
@@ -385,8 +389,6 @@ func runConvert(ctx context.Context, flags convertFlags, outFormatFlag string) (
 		}
 		return fmt.Errorf("converting %s to %s: %w", flags.in, flags.out, err)
 	}
-
-	warnPredicateMisses(os.Stderr, result.Stats.PredicateMisses, flags.where.expr)
 
 	if result.Stats.RowsSkipped > 0 {
 		fmt.Fprintf(os.Stdout, "wrote %s: %d rows read, %d rows skipped, %d documents dispatched\n",

@@ -1,6 +1,7 @@
 package expr_test
 
 import (
+	"math"
 	"strings"
 	"testing"
 
@@ -220,23 +221,45 @@ func TestEvalAllocatesNothing(t *testing.T) {
 	}
 }
 
+// fuzzRecords covers every value kind and Semantic a predicate can meet.
+func fuzzRecords() []record.Record {
+	return []record.Record{
+		sample(),
+		{},
+		record.Record{}.
+			Append("u", record.Int64(-1, record.SemanticUnsigned)).
+			Append("f", record.Float32(0.1)).
+			Append("n", record.Float64(math.NaN())).
+			Append("d", record.Int64(19723, record.SemanticDate)).
+			Append("ts", record.Int64(1_704_067_200_000, record.SemanticTimestampMillis)).
+			Append("l", record.List(nil)).
+			Append("m", record.Map(record.Record{})).
+			Append("big", str("9007199254740993")).
+			Append("u8", str("\xff\xfe")),
+	}
+}
+
 func FuzzCompileAndEval(f *testing.F) {
 	for _, seed := range []string{
 		`age > 18 and name = 'alice'`, `a in (1, 2, 3)`, `not (x is empty)`, "`a.b` contains 'x'",
-		`((((a = 1))))`, `x = 'unterminated`, `a = 1e999`, `a.b.c >= -1.5e3`,
+		`((((a = 1))))`, `x = 'unterminated`, `a = 1e999`, `a.b.c >= -1.5e3`, `u > 5 or f = 0.1`,
+		`d >= '2024-01-01' and ts < 5`, `é = 1`, `big = 9007199254740993`, `x not in (1, 'a')`,
 	} {
 		f.Add(seed)
 	}
 
-	rec := sample()
+	recs := fuzzRecords()
 	f.Fuzz(func(_ *testing.T, src string) {
-		p, err := expr.Compile(src, false)
-		if err != nil {
-			return
+		for _, strict := range []bool{false, true} {
+			p, err := expr.Compile(src, strict)
+			if err != nil {
+				return
+			}
+			ev := p.NewEvaluator()
+			for _, rec := range recs {
+				_, _ = ev.Match(rec)
+			}
 		}
-		ev := p.NewEvaluator()
-		_, _ = ev.Match(rec)
-		_, _ = ev.Match(record.Record{})
 	})
 }
 

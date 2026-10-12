@@ -21,9 +21,24 @@ path     = name { "." name }          a name is an identifier or a `quoted` segm
 literal  = number | 'string' | "string" | true | false
 ```
 
-Keywords are case-insensitive; column names are case-sensitive. A dotted path reaches into nested
-map entries (`attrs.env`). A column whose own name contains a dot is written in backticks:
+Keywords are case-insensitive; column names are case-sensitive and may contain any letters, digits,
+`_` and `-`, including non-ASCII ones (`größe > 5`). A dotted path reaches into nested map entries
+(`attrs.env`). A column whose own name contains a dot or other punctuation is written in backticks:
 ``attrs.`a.b` ``.
+
+Details worth knowing:
+
+- **Reserved words.** `not` is the one word you cannot use as a bare column name, because it begins
+  an expression; write `` `not` = 1 ``. Words like `and`, `in`, `is` and `contains` are fine as column
+  names where they cannot be misread.
+- **Strings** use `'...'` or `"..."` with the escapes `\n`, `\t`, `\\`, `\'` and `\"`. Any other
+  backslash is an error, so a Windows path is written `'C:\\path'`.
+- **`=` and `==`** both mean equals.
+- **Numbers** are decimal, optionally signed, with an optional fraction and exponent: `-5`, `4.5`,
+  `1e3`. A leading `+` or `.` is not accepted.
+- **Limits.** Parentheses and `not` may nest 64 levels in total (each `not (` level uses two), and an
+  expression may be at most 65,536 bytes.
+- Syntax errors name the column of the problem, counted in characters.
 
 ## How a comparison is decided
 
@@ -38,6 +53,22 @@ The **literal's type** decides how a value is compared:
 The text of a value is the converters' own rendering, so a date column compares as
 `'2024-01-01'`, and a number compares the same whichever format it came from.
 
+### Numbers in detail
+
+- **Whole numbers compare exactly**, as 64-bit integers, whether the value is a number or text:
+  `id = 9007199254740993` does not match the text `"9007199254740992"`, which a float comparison
+  would conflate. Values and literals up to 18446744073709551615 are exact, and an unsigned Parquet
+  column compares as unsigned.
+- **Decimals compare as 64-bit floats.** A `float32` column compares at float32 precision, so
+  `ratio = 0.1` matches a stored `0.1`.
+- **Text must look like a decimal number** to be read as one: digits with an optional sign, point
+  and exponent. `inf`, `NaN`, hex, `1_000` and padded text (`" 42"`) are not numbers; they are type
+  misses, so a column of identifiers cannot accidentally satisfy `> 0`.
+- **A number does not compare with a date or timestamp column.** The stored value is a day or tick
+  count whose unit would silently change the answer, so `ts > 1700000000` is a type miss. Compare with
+  a quoted ISO-8601 string instead: `ts >= '2024-01-01' and ts < '2024-02-01'`.
+- **NaN** is unordered: it matches only `!=`.
+
 ### Empty and missing values
 
 A **missing, null or empty value matches no comparison**, including `!=`. Test for it with
@@ -47,15 +78,46 @@ A **missing, null or empty value matches no comparison**, including `!=`. Test f
 email is not empty and email contains '@'
 ```
 
-So `not (x = 1)` is true for a record with no `x`. This is a deliberate, simple two-valued logic: a
-predicate answers "does this record match?", and a record that doesn't have the value doesn't match.
+An empty string, `null`, an empty list and an empty map are all "empty". So `not (x = 1)` is true for
+a record with no `x`. This is a deliberate, simple two-valued logic: a predicate answers "does this
+record match?", and a record that doesn't have the value doesn't match.
 
 ### Wrong types
 
-A value that cannot be compared with its literal (the string `unknown` against `age > 18`, or a
-list against a number) does **not match** and is counted in `Stats.PredicateMisses`; the CLI prints
-the count as a warning. With `--where-strict` (`WithWhereStrict`) the run fails instead, naming the
-column.
+A value that cannot be compared with its literal (the string `unknown` against `age > 18`, a
+non-empty list against a number, a boolean against a number) does **not match** and is counted in
+`Stats.PredicateMisses`; the CLI prints the count as a warning. With `--where-strict`
+(`WithWhereStrict`) the run fails instead, naming the column and why:
+
+```
+Error: ... value cannot be compared: column "age" is not a number, and the expression compares it with 18
+```
+
+The error does not carry a row number, since a record knows nothing of its position.
+
+Things that follow from "a miss does not match":
+
+- **A miss is counted where it is evaluated.** `and` and `or` stop as soon as the answer is known,
+  so `a > 1 or b > 1` never looks at `b` when `a > 1` holds. The count is deterministic for an
+  expression and data, and is in the order written.
+- **`not` turns a miss into a match.** `not (age > 18)` is true for the text `"unknown"`: the
+  comparison did not match, and its negation does. Under `--where-strict` that row is an error
+  instead.
+- **`in` is one test per row.** `x in (1, 'abc')` is true for `"abc"` whatever order the literals
+  are in. If nothing matches and a literal was the wrong type, it is a single miss, and then neither
+  `in` nor `not in` holds. Strict mode fails only in that case, never when a literal matched.
+
+### A column that doesn't exist
+
+A name no record has, almost always a typo, matches nothing and is reported:
+
+```
+$ streamio convert --in people.ndjson --out out.json --where "nmae = 'x'"
+warning: --where "nmae = 'x'" compares column "nmae", which no record had
+wrote out.json: 1000 rows read, 0 documents dispatched
+```
+
+`x is empty` is exempt, since asking about a column that may be absent is its purpose.
 
 ## Examples
 
@@ -197,12 +259,19 @@ $ --where "age in ()"
 Error: ... syntax error at column 9: expected a value (number, quoted string, true or false), found ")"
 ```
 
-An expression is validated before any file is opened, so a typo costs nothing.
+```
+$ --where ""
+Error: --where is empty: give a predicate, or omit the flag
+```
+
+An expression is validated before any file is opened, so a typo costs nothing. An *empty*
+`--where` is an error rather than "no filter", so an unset shell variable cannot silently disable a
+filter.
 
 ## Interaction with other options
 
-- Row filters run in the order they are given, before transforms. A `--where` therefore narrows what
-  sampling sees, so `--sample` and `--sample-n` count among the records that pass it.
+- Row filters run in the order they are given, before transforms, so a later filter sees only the
+  records that passed the earlier ones.
 - It forces the record path, so a same-format conversion decodes and re-encodes.
 - `stats --where` profiles only the matching records; `Stats.RowsFiltered` counts the rest.
 

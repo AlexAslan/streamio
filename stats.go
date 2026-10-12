@@ -39,6 +39,8 @@ type ColumnStats struct {
 }
 
 // Profile is the result of ProfileFile.
+//
+//nolint:govet // Fields are grouped by meaning, with their docs, rather than packed by size.
 type Profile struct {
 	// Columns lists every attribute in first-seen order.
 	Columns []ColumnStats `json:"columns"`
@@ -49,6 +51,9 @@ type Profile struct {
 	// PredicateMisses is how many WithWhere comparisons found a value of the wrong type for their
 	// literal and did not match.
 	PredicateMisses int64 `json:"predicate_misses,omitempty"`
+	// UnseenColumns lists the columns a WithWhere expression compares that no record had, which is
+	// usually a mistyped name.
+	UnseenColumns []string `json:"unseen_columns,omitempty"`
 	// ColumnsTruncated is true when the file had more distinct attribute paths than are tracked.
 	ColumnsTruncated bool `json:"columns_truncated"`
 }
@@ -107,6 +112,7 @@ func ProfileReaderAt(ctx context.Context, src Source, opts ...Option) (Profile, 
 		Records:          merged.Records,
 		RowsSkipped:      result.Stats.RowsSkipped,
 		PredicateMisses:  result.Stats.PredicateMisses,
+		UnseenColumns:    result.Stats.UnseenColumns,
 		ColumnsTruncated: merged.ColumnsTruncated,
 		Columns:          make([]ColumnStats, 0, len(merged.Columns)),
 	}

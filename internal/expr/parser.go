@@ -33,13 +33,17 @@ const (
 
 // literal is a parsed constant.
 type literal struct {
-	s     string
-	bs    []byte
-	f     float64
-	i     int64
-	kind  litKind
-	isInt bool
-	b     bool
+	s    string
+	bs   []byte
+	f    float64
+	mag  uint64
+	kind litKind
+	// isInteger is true when a number literal is a whole number that fits 64 bits, in which case
+	// neg and mag give its sign and magnitude exactly. Comparing integers through mag keeps values
+	// above 2^53 distinct, which a float64 could not.
+	isInteger bool
+	neg       bool
+	b         bool
 }
 
 type nodeKind uint8
@@ -70,6 +74,7 @@ type node struct {
 }
 
 type parser struct {
+	src  string
 	toks []token
 	pos  int
 }
@@ -77,19 +82,19 @@ type parser struct {
 // maxDepth bounds nesting so a hostile expression can't exhaust the stack.
 const maxDepth = 64
 
-// Parse parses src into an expression tree.
+// parse parses src into an expression tree.
 func parse(src string) (*node, error) {
 	toks, err := lex(src)
 	if err != nil {
 		return nil, err
 	}
-	p := &parser{toks: toks}
+	p := &parser{src: src, toks: toks}
 	n, err := p.parseOr(0)
 	if err != nil {
 		return nil, err
 	}
 	if t := p.peek(); t.kind != tokEOF {
-		return nil, syntaxErr(t.pos, "unexpected %q after the expression", t.text)
+		return nil, syntaxErr(p.src, t.pos, "unexpected %q after the expression", t.text)
 	}
 	return n, nil
 }
@@ -150,9 +155,15 @@ func (p *parser) parseAnd(depth int) (*node, error) {
 
 func (p *parser) parseNot(depth int) (*node, error) {
 	if depth > maxDepth {
-		return nil, syntaxErr(p.peek().pos, "expression nests deeper than %d", maxDepth)
+		return nil, syntaxErr(p.src, p.peek().pos, "expression nests deeper than %d", maxDepth)
 	}
-	if p.keyword("not") {
+	if p.peekKeyword("not") {
+		// "not = 1" is a column called not; say how to write it rather than failing on the =.
+		if next := p.toks[p.pos+1]; next.kind == tokOp || next.kind == tokDot {
+			return nil, syntaxErr(p.src, p.peek().pos,
+				"not is a keyword: write `not` in backticks to use it as a column name")
+		}
+		p.next()
 		x, err := p.parseNot(depth + 1)
 		if err != nil {
 			return nil, err
@@ -170,7 +181,7 @@ func (p *parser) parsePrimary(depth int) (*node, error) {
 			return nil, err
 		}
 		if t := p.next(); t.kind != tokRParen {
-			return nil, syntaxErr(t.pos, "expected ) but found %q", describe(t))
+			return nil, syntaxErr(p.src, t.pos, "expected ) but found %q", describe(t))
 		}
 		return n, nil
 	}
@@ -192,14 +203,14 @@ func describe(t token) string {
 func (p *parser) parsePath() ([]string, error) {
 	t := p.next()
 	if t.kind != tokIdent && t.kind != tokQuotedIdent {
-		return nil, syntaxErr(t.pos, "expected a column name but found %q", describe(t))
+		return nil, syntaxErr(p.src, t.pos, "expected a column name but found %q", describe(t))
 	}
 	path := []string{t.text}
 	for p.peek().kind == tokDot {
 		p.next()
 		seg := p.next()
 		if seg.kind != tokIdent && seg.kind != tokQuotedIdent {
-			return nil, syntaxErr(seg.pos, "expected a name after . but found %q", describe(seg))
+			return nil, syntaxErr(p.src, seg.pos, "expected a name after . but found %q", describe(seg))
 		}
 		path = append(path, seg.text)
 	}
@@ -215,13 +226,13 @@ func (p *parser) parsePredicate(path []string) (*node, error) {
 	case p.keyword("is"):
 		negate := p.keyword("not")
 		if !p.keyword("empty") {
-			return nil, syntaxErr(p.peek().pos, "expected empty after is")
+			return nil, syntaxErr(p.src, p.peek().pos, "expected empty after is")
 		}
 		return &node{kind: nodeEmpty, path: path, negate: negate}, nil
 	case p.peekKeyword("not"):
 		p.next()
 		if !p.keyword("in") {
-			return nil, syntaxErr(p.peek().pos, "expected in after not")
+			return nil, syntaxErr(p.src, p.peek().pos, "expected in after not")
 		}
 		return p.parseIn(path, true)
 	case p.keyword("in"):
@@ -231,7 +242,7 @@ func (p *parser) parsePredicate(path []string) (*node, error) {
 	case p.keyword("starts_with"):
 		return p.parseStrOp(path, strStartsWith)
 	default:
-		return nil, syntaxErr(t.pos, "expected a comparison after the column name but found %q", describe(t))
+		return nil, syntaxErr(p.src, t.pos, "expected a comparison after the column name but found %q", describe(t))
 	}
 }
 
@@ -258,14 +269,14 @@ func (p *parser) parseComparison(path []string) (*node, error) {
 		return nil, err
 	}
 	if lit.kind == litBool && op != opEq && op != opNe {
-		return nil, syntaxErr(opTok.pos, "%s cannot compare true or false: use = or !=", opTok.text)
+		return nil, syntaxErr(p.src, opTok.pos, "%s cannot compare true or false: use = or !=", opTok.text)
 	}
 	return &node{kind: nodeCmp, path: path, op: op, lit: lit}, nil
 }
 
 func (p *parser) parseIn(path []string, negate bool) (*node, error) {
 	if t := p.next(); t.kind != tokLParen {
-		return nil, syntaxErr(t.pos, "expected ( after in but found %q", describe(t))
+		return nil, syntaxErr(p.src, t.pos, "expected ( after in but found %q", describe(t))
 	}
 	var lits []literal
 	for {
@@ -280,7 +291,7 @@ func (p *parser) parseIn(path []string, negate bool) (*node, error) {
 			break
 		}
 		if t.kind != tokComma {
-			return nil, syntaxErr(t.pos, "expected , or ) but found %q", describe(t))
+			return nil, syntaxErr(p.src, t.pos, "expected , or ) but found %q", describe(t))
 		}
 	}
 	return &node{kind: nodeIn, path: path, lits: lits, negate: negate}, nil
@@ -289,7 +300,7 @@ func (p *parser) parseIn(path []string, negate bool) (*node, error) {
 func (p *parser) parseStrOp(path []string, op strOp) (*node, error) {
 	t := p.next()
 	if t.kind != tokString {
-		return nil, syntaxErr(t.pos, "expected a quoted string but found %q", describe(t))
+		return nil, syntaxErr(p.src, t.pos, "expected a quoted string but found %q", describe(t))
 	}
 	return &node{kind: nodeStr, path: path, sop: op, text: t.text}, nil
 }
@@ -302,12 +313,10 @@ func (p *parser) parseLiteral() (literal, error) {
 	case tokNumber:
 		f, err := strconv.ParseFloat(t.text, 64)
 		if err != nil {
-			return literal{}, syntaxErr(t.pos, "%q is not a number", t.text)
+			return literal{}, syntaxErr(p.src, t.pos, "%q is not a number", t.text)
 		}
 		lit := literal{kind: litNumber, f: f, s: t.text}
-		if i, ierr := strconv.ParseInt(t.text, 10, 64); ierr == nil {
-			lit.i, lit.isInt = i, true
-		}
+		lit.neg, lit.mag, lit.isInteger = parseInteger([]byte(t.text))
 		return lit, nil
 	case tokIdent:
 		switch strings.ToLower(t.text) {
@@ -318,7 +327,8 @@ func (p *parser) parseLiteral() (literal, error) {
 		}
 	case tokEOF, tokQuotedIdent, tokLParen, tokRParen, tokComma, tokDot, tokOp:
 	}
-	return literal{}, syntaxErr(t.pos, "expected a value (number, quoted string, true or false), found %q", describe(t))
+	return literal{}, syntaxErr(p.src, t.pos,
+		"expected a value (number, quoted string, true or false), found %q", describe(t))
 }
 
 // String renders a literal for error messages.

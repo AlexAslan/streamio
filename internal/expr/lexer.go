@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 )
 
 type tokenKind uint8
@@ -48,15 +49,25 @@ type token struct {
 // ErrSyntax is wrapped by every parse error.
 var ErrSyntax = errors.New("syntax error")
 
-func syntaxErr(pos int, format string, args ...any) error {
-	return fmt.Errorf("%w at column %d: %s", ErrSyntax, pos+1, fmt.Sprintf(format, args...))
+// syntaxErr reports a problem at byte offset pos of src, as a 1-based column counted in characters.
+func syntaxErr(src string, pos int, format string, args ...any) error {
+	column := utf8.RuneCountInString(src[:min(pos, len(src))]) + 1
+	return fmt.Errorf("%w at column %d: %s", ErrSyntax, column, fmt.Sprintf(format, args...))
 }
+
+// maxExpressionLength bounds how large an expression may be, so a hostile or accidental one cannot
+// build an arbitrarily deep evaluator.
+const maxExpressionLength = 1 << 16
 
 // quoteOverhead is the two backticks around a quoted name.
 const quoteOverhead = 2
 
 // lex splits src into tokens.
 func lex(src string) ([]token, error) {
+	if len(src) > maxExpressionLength {
+		return nil, syntaxErr(src, 0, "expression is %d bytes, over the %d byte limit", len(src), maxExpressionLength)
+	}
+
 	var toks []token
 	for i := 0; i < len(src); {
 		t, n, err := lexOne(src, i)
@@ -95,7 +106,7 @@ func lexOne(src string, i int) (token, int, error) {
 	case c == '`':
 		end := strings.IndexByte(src[i+1:], '`')
 		if end < 0 {
-			return token{}, 0, syntaxErr(i, "unterminated quoted name")
+			return token{}, 0, syntaxErr(src, i, "unterminated quoted name")
 		}
 		return token{kind: tokQuotedIdent, text: src[i+1 : i+1+end], pos: i}, end + quoteOverhead, nil
 	case isOpChar(c):
@@ -106,15 +117,31 @@ func lexOne(src string, i int) (token, int, error) {
 			j++
 		}
 		return token{kind: tokNumber, text: src[i:j], pos: i}, j - i, nil
-	case isIdentStart(rune(c)):
-		j := i + 1
-		for j < len(src) && isIdentPart(rune(src[j])) {
-			j++
-		}
-		return token{kind: tokIdent, text: src[i:j], pos: i}, j - i, nil
 	default:
-		return token{}, 0, syntaxErr(i, "unexpected character %q", string(rune(c)))
+		return lexIdent(src, i)
 	}
+}
+
+// lexIdent reads a bare name: a letter or underscore, then letters, digits, underscores and
+// hyphens, in any script.
+func lexIdent(src string, i int) (token, int, error) {
+	r, size := utf8.DecodeRuneInString(src[i:])
+	if r == utf8.RuneError && size <= 1 {
+		return token{}, 0, syntaxErr(src, i, "invalid UTF-8")
+	}
+	if !isIdentStart(r) {
+		return token{}, 0, syntaxErr(src, i, "unexpected character %q", string(r))
+	}
+
+	j := i + size
+	for j < len(src) {
+		next, n := utf8.DecodeRuneInString(src[j:])
+		if (next == utf8.RuneError && n <= 1) || !isIdentPart(next) {
+			break
+		}
+		j += n
+	}
+	return token{kind: tokIdent, text: src[i:j], pos: i}, j - i, nil
 }
 
 func lexOperator(src string, i int) (token, int, error) {
@@ -126,7 +153,7 @@ func lexOperator(src string, i int) (token, int, error) {
 	case "=", "!=", "<", "<=", ">", ">=", "==":
 		return token{kind: tokOp, text: op, pos: i}, j - i, nil
 	default:
-		return token{}, 0, syntaxErr(i, "unknown operator %q", op)
+		return token{}, 0, syntaxErr(src, i, "unknown operator %q", op)
 	}
 }
 
@@ -145,7 +172,7 @@ func lexString(src string, start int) (string, int, error) {
 			case '\\', '\'', '"':
 				sb.WriteByte(src[i])
 			default:
-				return "", 0, syntaxErr(i-1, "unknown escape \\%c", src[i])
+				return "", 0, syntaxErr(src, i-1, "unknown escape \\%c", src[i])
 			}
 		case c == quote:
 			return sb.String(), i - start + 1, nil
@@ -153,7 +180,7 @@ func lexString(src string, start int) (string, int, error) {
 			sb.WriteByte(c)
 		}
 	}
-	return "", 0, syntaxErr(start, "unterminated string")
+	return "", 0, syntaxErr(src, start, "unterminated string")
 }
 
 func isOpChar(c byte) bool { return c == '=' || c == '!' || c == '<' || c == '>' }

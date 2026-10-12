@@ -72,12 +72,12 @@ func TestRunStats_Where(t *testing.T) {
 
 func TestWarnPredicateMisses(t *testing.T) {
 	var buf bytes.Buffer
-	warnPredicateMisses(&buf, 0, "age > 1")
+	warnWhere(&buf, "age > 1", 0, nil)
 	if buf.Len() != 0 {
 		t.Errorf("no misses should warn nothing, got %q", buf.String())
 	}
 
-	warnPredicateMisses(&buf, 20, "score > 50")
+	warnWhere(&buf, "score > 50", 20, nil)
 	for _, want := range []string{"20 comparisons", `"score > 50"`, "--where-strict"} {
 		if !strings.Contains(buf.String(), want) {
 			t.Errorf("warning %q lacks %q", buf.String(), want)
@@ -101,5 +101,63 @@ func TestRunStats_WhereReportsTypeMisses(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), `"predicate_misses": 2`) {
 		t.Errorf("want 2 predicate misses:\n%s", out.String())
+	}
+}
+
+func TestWhereOptions_EmptyExpressionIsAnErrorWhenGiven(t *testing.T) {
+	// Given but empty (a shell variable that was unset): an error, not "no filter".
+	if _, err := whereOptions(whereFlags{expr: "", set: true}); !errors.Is(err, errEmptyWhere) {
+		t.Errorf("--where \"\": err = %v, want errEmptyWhere", err)
+	}
+	if _, err := whereOptions(whereFlags{expr: "   ", set: true}); !errors.Is(err, errEmptyWhere) {
+		t.Errorf("--where \"   \": err = %v, want errEmptyWhere", err)
+	}
+
+	// Not given at all: no filter.
+	opts, err := whereOptions(whereFlags{})
+	if err != nil || opts != nil {
+		t.Errorf("no --where: opts = %v err = %v, want none", opts, err)
+	}
+}
+
+func TestRootCmd_WhereGivenButEmptyFails(t *testing.T) {
+	in := writeAges(t)
+
+	root := newRootCmd()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetArgs([]string{"convert", "--in", in, "--out", filepath.Join(t.TempDir(), "o.json"), "--where", ""})
+
+	err := root.Execute()
+	if !errors.Is(err, errEmptyWhere) {
+		t.Errorf("err = %v, want errEmptyWhere", err)
+	}
+}
+
+func TestWarnWhere(t *testing.T) {
+	var buf bytes.Buffer
+	warnWhere(&buf, "age > 1", 0, nil)
+	if buf.Len() != 0 {
+		t.Errorf("nothing to report should print nothing, got %q", buf.String())
+	}
+
+	warnWhere(&buf, "nmae = 'x'", 0, []string{"nmae"})
+	if !strings.Contains(buf.String(), `column "nmae"`) {
+		t.Errorf("unseen column not reported: %q", buf.String())
+	}
+}
+
+func TestRunConvert_WhereStrictFailureStillExplainsItself(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "messy.ndjson")
+	if err := os.WriteFile(path, []byte("{\"age\":\"n/a\"}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err := runConvert(context.Background(), convertFlags{
+		in: path, out: filepath.Join(t.TempDir(), "o.json"), where: whereFlags{expr: "age > 18", strict: true},
+	}, "json")
+	if err == nil || !strings.Contains(err.Error(), `column "age"`) {
+		t.Errorf("err = %v, want one naming column age", err)
 	}
 }
