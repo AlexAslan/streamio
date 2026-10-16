@@ -4,7 +4,7 @@ go 1.27
 
 require (
 	github.com/AlexAslan/parquet-go v0.32.1
-	github.com/andybalholm/brotli v1.2.3
+	github.com/andybalholm/brotli v1.2.6
 	github.com/apache/arrow-go/v18 v18.8.0
 	github.com/klauspost/compress v1.19.2
 	github.com/pierrec/lz4/v4 v4.1.29
